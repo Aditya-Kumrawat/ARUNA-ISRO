@@ -133,3 +133,44 @@ def test_all_physics_frames_have_provenance_hash():
 def test_no_div_zero_or_nan_propagation():
     """No NaN or infinity in any PhysicsFrame field under normal operating conditions."""
     pytest.fail("not implemented")
+
+
+import numpy as np
+from aruna.l2_physics.chianti_table import CHIANTILookupTable
+
+
+class TestCHIANTITable:
+    def _bins(self):
+        return np.linspace(1.0, 25.0, 25)  # 24 bins
+
+    def test_generate_creates_table(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "chianti_table.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        table = CHIANTILookupTable()
+        table.generate(self._bins())
+        assert (tmp_path / "chianti_table.npz").exists()
+
+    def test_lookup_returns_nonneg_spectrum(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "chianti_table.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        table = CHIANTILookupTable()
+        table.generate(self._bins())
+        spec = table.lookup(15.0, 1e48, self._bins())
+        assert spec.shape == (24,)
+        assert np.all(spec >= 0)
+
+    def test_lookup_higher_T_peaks_at_higher_energy(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "chianti_table.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        bins = np.linspace(1.0, 25.0, 25)
+        table = CHIANTILookupTable()
+        table.generate(bins)
+        spec_cold = table.lookup(5.0, 1e48, bins)
+        spec_hot  = table.lookup(30.0, 1e48, bins)
+        centres = (bins[:-1] + bins[1:]) / 2.0
+        mean_e_cold = np.average(centres, weights=spec_cold + 1e-30)
+        mean_e_hot  = np.average(centres, weights=spec_hot  + 1e-30)
+        assert mean_e_hot > mean_e_cold

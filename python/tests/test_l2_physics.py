@@ -7,6 +7,7 @@ The X6.3 T/EM test is the single most important test in the entire suite.
 import math
 from datetime import datetime, timezone
 
+import numpy as np
 import pytest
 
 from aruna.l2_physics.models import (
@@ -365,3 +366,108 @@ class TestIsothermalFitter:
         counts, bins = self._synthetic_spectrum()
         result = fitter.fit(counts, bins)
         assert result.backend in ("sunkit_spex", "chianti_lookup")
+
+
+class TestFeKaExtractor:
+    def test_known_feka_line_detected(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        bins = np.linspace(1.0, 25.0, 65)
+        centres = (bins[:-1] + bins[1:]) / 2.0
+        from aruna.l2_physics.chianti_table import _bremsstrahlung
+        counts = _bremsstrahlung(centres, 15.0, 1e48).copy()
+        feka_mask = (centres >= 6.2) & (centres <= 6.6)
+        # Add 1% FeKa signal above continuum (realistic for solar flares)
+        counts[feka_mask] += counts[feka_mask] * 0.01
+        from aruna.l2_physics.feka import FeKaExtractor
+        ext = FeKaExtractor()
+        flux = ext.extract(counts, bins, T_MK=15.0, EM_cm3=1e48)
+        assert flux > 0
+
+    def test_nan_T_returns_zero(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        from aruna.l2_physics.feka import FeKaExtractor
+        ext = FeKaExtractor()
+        bins = np.linspace(1.0, 25.0, 25)
+        counts = np.ones(24)
+        assert ext.extract(counts, bins, T_MK=float("nan"), EM_cm3=1e48) == 0.0
+
+    def test_feka_flux_nonneg(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        from aruna.l2_physics.feka import FeKaExtractor
+        ext = FeKaExtractor()
+        bins = np.linspace(1.0, 25.0, 25)
+        counts = np.zeros(24)
+        assert ext.extract(counts, bins, T_MK=15.0, EM_cm3=1e48) >= 0.0
+
+
+class TestHOPEEvaluator:
+    def _cfg(self):
+        return PhysicsConfig()
+
+    def _all_true_kwargs(self):
+        cfg = self._cfg()
+        return dict(
+            T=15.0, dT_dt=0.5, EM=1e47, dEM_dt=1e44,
+            DNI=0.5, tnpsv_mag=0.1,
+            tnpsv_angle=np.deg2rad(90),
+            hel_flux=100.0, hel_quiet_baseline=200.0,
+            streak_sec=5.0, config=cfg,
+        )
+
+    def test_all_conditions_true_fires_hope(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        r = ev.evaluate(**self._all_true_kwargs())
+        assert r.hope_flag is True
+
+    def test_t_not_rising_blocks_hope(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        kwargs = self._all_true_kwargs()
+        kwargs["dT_dt"] = -0.1
+        r = ev.evaluate(**kwargs)
+        assert r.hope_flag is False
+
+    def test_streak_too_short_blocks_hope(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        kwargs = self._all_true_kwargs()
+        kwargs["streak_sec"] = 1.0
+        r = ev.evaluate(**kwargs)
+        assert r.hope_flag is False
+
+    def test_em_rising_blocks_hope(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        kwargs = self._all_true_kwargs()
+        kwargs["dEM_dt"] = 1e50
+        r = ev.evaluate(**kwargs)
+        assert r.hope_flag is False
+
+    def test_hel1os_active_blocks_hope(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        kwargs = self._all_true_kwargs()
+        kwargs["hel_flux"] = 1000.0
+        r = ev.evaluate(**kwargs)
+        assert r.hope_flag is False
+
+    def test_lead_time_scales_with_streak(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        kwargs = self._all_true_kwargs()
+        kwargs["streak_sec"] = 10.0
+        r = ev.evaluate(**kwargs)
+        assert r.lead_time_sec == int(90 + 10.0 * 2)
+
+    def test_reason_always_populated(self):
+        from aruna.l2_physics.hope import HOPEEvaluator
+        ev = HOPEEvaluator()
+        r = ev.evaluate(**self._all_true_kwargs())
+        assert len(r.reason) > 0

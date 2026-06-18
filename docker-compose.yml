@@ -1,0 +1,195 @@
+version: "3.9"
+
+services:
+  # ── Kafka infrastructure ────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    hostname: zookeeper
+    container_name: aruna-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: aruna-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── Databases ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: aruna-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aruna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aruna_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-aruna}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aruna}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: aruna-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MLflow experiment tracking ──────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: aruna-mlflow
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-aruna}:${POSTGRES_PASSWORD:-aruna_dev}@postgres:5432/${POSTGRES_DB:-aruna}_mlflow
+      MLFLOW_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri postgresql://${POSTGRES_USER:-aruna}:${POSTGRES_PASSWORD:-aruna_dev}@postgres:5432/${POSTGRES_DB:-aruna}_mlflow
+        --default-artifact-root /mlflow/artifacts
+
+  # ── Ollama LLM (Mistral 7B — air-gapped capable) ───────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aruna-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Python pipeline ─────────────────────────────────────────────────────────
+  aruna-pipeline:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    container_name: aruna-pipeline
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aruna}:${POSTGRES_PASSWORD:-aruna_dev}@postgres:5432/${POSTGRES_DB:-aruna}
+      REDIS_URL: redis://redis:6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OLLAMA_HOST: http://ollama:11434
+      ARUNA_CONFIG: /app/config/config.yaml
+      PRADAN_USERNAME: ${PRADAN_USERNAME}
+      PRADAN_PASSWORD: ${PRADAN_PASSWORD}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./models:/app/models
+    ports:
+      - "8000:8000"
+    command: python -m aruna.pipeline.run
+
+  # ── Node.js API gateway ─────────────────────────────────────────────────────
+  aruna-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: aruna-api
+    restart: unless-stopped
+    depends_on:
+      aruna-pipeline:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aruna}:${POSTGRES_PASSWORD:-aruna_dev}@postgres:5432/${POSTGRES_DB:-aruna}
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      PYTHON_API_URL: http://aruna-pipeline:8000
+      JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
+      PORT: 3001
+    ports:
+      - "3001:3001"
+
+  # ── React frontend ──────────────────────────────────────────────────────────
+  aruna-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: aruna-web
+    restart: unless-stopped
+    depends_on:
+      - aruna-api
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:3001
+      VITE_WS_URL: ws://localhost:3001
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:
+  ollama_models:
+
+networks:
+  default:
+    name: aruna-network

@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --aruna-bg: #0a0e1a;
+  --aruna-surface: #111827;
+  --aruna-border: #1f2937;
+  --aruna-accent: #3b82f6;
+  --aruna-warning: #f59e0b;
+  --aruna-danger: #ef4444;
+  --aruna-success: #10b981;
+}
+
+body {
+  background-color: var(--aruna-bg);
+  color: #f9fafb;
+  font-family: "Inter", system-ui, sans-serif;
+}

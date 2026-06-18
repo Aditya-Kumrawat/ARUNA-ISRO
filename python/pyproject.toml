@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "aruna"
+version = "2.0.0"
+description = "Aditya-L1 Real-time Unified Nowcasting & Alert System"
+requires-python = ">=3.11"
+readme = "../README.md"
+
+[project.scripts]
+aruna-pipeline = "aruna.pipeline.run:main"
+aruna-replay   = "aruna.pipeline.replay:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aruna*"]
+
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "integration: marks end-to-end integration tests",
+    "physics: marks physics validation tests against published values",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+strict = false

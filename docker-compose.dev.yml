@@ -1,0 +1,43 @@
+version: "3.9"
+
+# Development overrides — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Brings up only infrastructure (Kafka, Postgres, Redis, MLflow, Ollama).
+# Python pipeline and Node API run locally for hot-reload development.
+
+services:
+  zookeeper:
+    environment:
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+
+  kafka:
+    environment:
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: ERROR
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  mlflow:
+    ports:
+      - "5000:5000"
+
+  ollama:
+    ports:
+      - "11434:11434"
+
+  # Do not start application services in dev — run locally instead
+  aruna-pipeline:
+    profiles: ["prod"]
+
+  aruna-api:
+    profiles: ["prod"]
+
+  aruna-web:
+    profiles: ["prod"]

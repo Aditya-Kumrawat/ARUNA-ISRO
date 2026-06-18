@@ -1,0 +1,90 @@
+// ARUNA Prisma Schema
+// Maps to PRD §15 Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Master Flare Catalog (PRD §7.8) ──────────────────────────────────────────
+model FlareEvent {
+  eventId          String    @id @default(uuid()) @map("event_id")
+  startTime        DateTime  @map("start_time")
+  hopeTime         DateTime? @map("hope_time")
+  onsetTime        DateTime? @map("onset_time")
+  peakTime         DateTime? @map("peak_time")
+  endTime          DateTime? @map("end_time")
+  durationSec      Int?      @map("duration_sec")
+  goesClass        String    @map("goes_class")
+  goesSubclass     Float     @map("goes_subclass")
+  peakFluxSolexs   Float?    @map("peak_flux_solexs")
+  peakFluxHel1os   Float?    @map("peak_flux_hel1os")
+  peakTMk          Float?    @map("peak_T_MK")
+  peakEmCm3        Float?    @map("peak_EM_cm3")
+  peakDni          Float?    @map("peak_DNI")
+  hopeLeadTimeSec  Int?      @map("hope_lead_time_sec")
+  hopeFired        Boolean   @default(false) @map("hope_fired")
+  instruments      String    // JSON array
+  detectionMethod  String    @map("detection_method")
+  confidence       Float
+  goesCatalogMatch String?   @map("goes_catalog_match")
+  noaaArNumber     Int?      @map("noaa_ar_number")
+  flareType        String    @map("flare_type")
+  pipelineVersion  String    @map("pipeline_version")
+  provenanceHash   String    @map("provenance_hash")
+  notes            String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("master_flare_catalog")
+}
+
+// ── Validation Results (PRD §15.3) ───────────────────────────────────────────
+model ValidationResult {
+  runId              String   @id @default(uuid()) @map("run_id")
+  timestamp          DateTime @default(now())
+  pipelineVersion    String   @map("pipeline_version")
+  modelVersion       String   @map("model_version")
+  evalPeriodStart    DateTime @map("eval_period_start")
+  evalPeriodEnd      DateTime @map("eval_period_end")
+  nEvents            Int      @map("n_events")
+  tprMX              Float    @map("tpr_M_X")
+  farMX              Float    @map("far_M_X")
+  tssMX              Float    @map("tss_M_X")
+  hss                Float
+  cohenKappa         Float    @map("cohen_kappa")
+  rocAuc             Float    @map("roc_auc")
+  ece                Float
+  leadTimeMaeSec     Float    @map("lead_time_mae_sec")
+  bootstrapCiTssLow  Float    @map("bootstrap_ci_tss_low")
+  bootstrapCiTssHigh Float    @map("bootstrap_ci_tss_high")
+  confusionMatrix    String   @map("confusion_matrix") // JSON 5×5
+  notes              String?
+
+  @@map("validation_results")
+}
+
+// ── Model Registry (PRD §15.4) ───────────────────────────────────────────────
+model ModelRegistry {
+  modelId        String    @id @default(uuid()) @map("model_id")
+  modelType      String    @map("model_type")  // TCN|Moirai|MAPIE|LightGBM|LogReg
+  version        String
+  trainPeriod    String    @map("train_period")
+  valTss         Float     @map("val_tss")
+  valEce         Float     @map("val_ece")
+  artifactPath   String    @map("artifact_path")
+  gitCommit      String?   @map("git_commit")
+  experimentId   String?   @map("experiment_id")
+  deployed       Boolean   @default(false)
+  deployedAt     DateTime? @map("deployed_at")
+  notes          String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("model_registry")
+}

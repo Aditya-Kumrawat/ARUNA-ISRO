@@ -1,0 +1,75 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+config/config.yaml          # copy of config.example.yaml with real values
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.conda/
+*.pyc
+
+# ── Pytest ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ── Data + Models (large binary files) ───────────────────────────────────────
+data/cache/*.fits
+data/cache/*.gz
+data/*.db
+data/*.sqlite
+models/*.pt
+models/*.pkl
+models/*.index
+models/*.bin
+
+# ── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+api/node_modules/
+web/node_modules/
+npm-debug.log*
+yarn-error.log
+.pnpm-debug.log*
+
+# ── React / Vite build output ─────────────────────────────────────────────────
+web/dist/
+web/.vite/
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+.docker/
+
+# ── MLflow artifacts ─────────────────────────────────────────────────────────
+mlruns/
+mlartifacts/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

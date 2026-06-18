@@ -1,3 +1,10 @@
+"""CHIANTI deterministic fallback — MKG bremsstrahlung approximation.
+
+This lookup table is the fallback used when sunkit-spex is unavailable.
+It is NOT ground truth. The authoritative isothermal fit is sunkit-spex f_vth
+with the real CHIANTI atomic database (Sarwade et al. 2025). This module
+exists to keep tests deterministic and offline-capable.
+"""
 from __future__ import annotations
 import logging
 from pathlib import Path
@@ -17,11 +24,17 @@ def _bremsstrahlung(energies_kev: np.ndarray, T_MK: float, EM_cm3: float) -> np.
     T_K  = T_MK * 1e6
     kT   = 8.617e-8 * T_K        # keV
     A    = 9.52e-24               # MKG normalisation (cm^3 s^-1 keV^-1)
-    spec = A * EM_cm3 * (T_K ** -0.5) * np.exp(-energies_kev / (kT + 1e-30)) * 1.2
+    spec = A * EM_cm3 * (T_K ** -0.5) * np.exp(-energies_kev / (kT + 1e-30)) * 1.2  # approximate mean Gaunt factor for soft X-ray range (MKG 1985)
     return np.clip(spec, 0.0, None)
 
 
 class CHIANTILookupTable:
+    """Precomputed (T, EM) → synthetic spectrum lookup table.
+
+    Lazy-loads from data/chianti_table.npz; auto-generates if absent (~5s).
+    T and EM are clipped to grid bounds before interpolation (no extrapolation errors).
+    Not thread-safe — use one instance per process.
+    """
     def __init__(self) -> None:
         self._interp: RegularGridInterpolator | None = None
 

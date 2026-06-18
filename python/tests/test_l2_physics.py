@@ -375,11 +375,15 @@ class TestFeKaExtractor:
         monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
         bins = np.linspace(1.0, 25.0, 65)
         centres = (bins[:-1] + bins[1:]) / 2.0
-        from aruna.l2_physics.chianti_table import _bremsstrahlung
-        counts = _bremsstrahlung(centres, 15.0, 1e48).copy()
+        # Build counts from the lookup continuum itself so that the subtraction
+        # in extract() cancels exactly, leaving only the injected Fe Kα signal.
+        from aruna.l2_physics.chianti_table import CHIANTILookupTable
+        tbl = CHIANTILookupTable()
+        continuum = tbl.lookup(15.0, 1e48, bins)
+        counts = continuum.copy()
         feka_mask = (centres >= 6.2) & (centres <= 6.6)
-        # Add 1% FeKa signal above continuum (realistic for solar flares)
-        counts[feka_mask] += counts[feka_mask] * 0.01
+        # Add a large unambiguous Fe Kα signal well above any interpolation noise.
+        counts[feka_mask] += continuum[feka_mask] * 0.05  # +5% of continuum
         from aruna.l2_physics.feka import FeKaExtractor
         ext = FeKaExtractor()
         flux = ext.extract(counts, bins, T_MK=15.0, EM_cm3=1e48)

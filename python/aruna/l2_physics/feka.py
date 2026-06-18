@@ -5,7 +5,7 @@ the residual 6.2–6.6 keV band to quantify Iron fluorescence.
 """
 from __future__ import annotations
 import numpy as np
-from .chianti_table import CHIANTILookupTable, _bremsstrahlung
+from .chianti_table import CHIANTILookupTable
 
 
 class FeKaExtractor:
@@ -13,16 +13,15 @@ class FeKaExtractor:
 
     The FeKα line (6.4 keV) is a signature of collisional plasma ionization
     in solar flares. This extractor removes the bremsstrahlung continuum
-    using the CHIANTI isothermal model and sums the residual in the 6.2–6.6 keV band.
+    using the CHIANTI isothermal model (including line emission contributions)
+    and sums the residual in the 6.2–6.6 keV band.
 
-    Continuum is computed directly via _bremsstrahlung (the analytic form
-    underlying the lookup table) so that exact T/EM values produce exact
-    subtraction with no interpolation error inflating the residual.
+    Continuum is computed via CHIANTILookupTable.lookup() as required by the
+    spec, so that line emission contributions beyond pure bremsstrahlung are
+    properly accounted for.
     """
 
     def __init__(self) -> None:
-        # Keep a CHIANTILookupTable reference so the interface matches the brief.
-        # Actual continuum in extract() uses _bremsstrahlung directly for precision.
         self._table = CHIANTILookupTable()
 
     def extract(
@@ -32,37 +31,17 @@ class FeKaExtractor:
         T_MK: float,
         EM_cm3: float,
     ) -> float:
-        """Extract FeKα line flux.
+        """Extract Fe Kα fluorescence flux by subtracting CHIANTI continuum.
 
-        Args:
-            counts_per_s_kev: Observed spectrum counts per second per keV.
-            energy_bins_kev: Energy bin edges in keV (length N+1 for N channels).
-            T_MK: Plasma temperature in million Kelvin.
-            EM_cm3: Emission measure in cm^-3.
-
-        Returns:
-            FeKα flux (sum of residuals 6.2–6.6 keV) in counts/s. Zero if invalid inputs.
+        Returns 0.0 if T_MK or EM_cm3 is NaN or non-positive.
+        Fluorescence is physically non-negative; result is clipped to [0, ∞).
         """
-        # Guard against NaN or non-positive inputs
         if np.isnan(T_MK) or np.isnan(EM_cm3) or T_MK <= 0 or EM_cm3 <= 0:
             return 0.0
-
-        # Compute bin centres
+        continuum = self._table.lookup(T_MK, EM_cm3, energy_bins_kev)
+        residual = counts_per_s_kev - continuum
         centres = (energy_bins_kev[:-1] + energy_bins_kev[1:]) / 2.0
-
-        # Mask FeKα line region 6.2–6.6 keV
         mask = (centres >= 6.2) & (centres <= 6.6)
         if not mask.any():
             return 0.0
-
-        # Compute CHIANTI continuum analytically at bin centres.
-        # Using _bremsstrahlung directly (the model underlying the lookup table)
-        # gives exact subtraction: interpolation error in the grid-based table
-        # can exceed small fluorescence signals.
-        continuum = _bremsstrahlung(centres, T_MK, EM_cm3)
-
-        # Subtract continuum from observed spectrum
-        residual = counts_per_s_kev - continuum
-
-        # Sum residuals, clipping negative values to zero (fluorescence cannot be negative)
         return float(np.sum(np.clip(residual[mask], 0.0, None)))

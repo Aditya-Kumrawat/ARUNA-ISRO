@@ -136,7 +136,8 @@ def test_no_div_zero_or_nan_propagation():
 
 
 import numpy as np
-from aruna.l2_physics.chianti_table import CHIANTILookupTable
+from aruna.l2_physics.chianti_table import CHIANTILookupTable, _bremsstrahlung
+from aruna.l2_physics.isothermal import IsothermalFitter
 from aruna.l2_physics.dni import DNIComputer
 from aruna.l2_physics.tnpsv import TNPSVComputer
 from aruna.l2_physics.shei import SHEIComputer
@@ -315,3 +316,50 @@ class TestQPPDetector:
             period, amp = q.update(float(x))
         if period is not None:
             assert 20 < period < 45
+
+
+class TestIsothermalFitter:
+    def _synthetic_spectrum(self, T_MK=15.0, EM_cm3=1e48):
+        bins = np.linspace(1.0, 25.0, 25)
+        centres = (bins[:-1] + bins[1:]) / 2.0
+        return _bremsstrahlung(centres, T_MK, EM_cm3), bins
+
+    def test_fit_returns_fitresult(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        fitter = IsothermalFitter()
+        counts, bins = self._synthetic_spectrum()
+        result = fitter.fit(counts, bins)
+        assert hasattr(result, "T_MK")
+        assert hasattr(result, "backend")
+
+    def test_fit_converges_on_synthetic(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        fitter = IsothermalFitter()
+        counts, bins = self._synthetic_spectrum(T_MK=15.0, EM_cm3=1e48)
+        result = fitter.fit(counts, bins)
+        assert not np.isnan(result.T_MK), "fit should converge on synthetic data"
+        assert result.T_MK > 0
+        assert result.chi2_reduced < 5.0
+
+    def test_fit_returns_nan_on_zero_spectrum(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        fitter = IsothermalFitter()
+        bins = np.linspace(1.0, 25.0, 25)
+        counts = np.zeros(24)
+        result = fitter.fit(counts, bins)
+        assert np.isnan(result.T_MK)
+
+    def test_backend_field_always_set(self, tmp_path, monkeypatch):
+        import aruna.l2_physics.chianti_table as ct
+        monkeypatch.setattr(ct, "_TABLE_PATH", tmp_path / "t.npz")
+        monkeypatch.setattr(ct, "_DATA_DIR", tmp_path)
+        fitter = IsothermalFitter()
+        counts, bins = self._synthetic_spectrum()
+        result = fitter.fit(counts, bins)
+        assert result.backend in ("sunkit_spex", "chianti_lookup")

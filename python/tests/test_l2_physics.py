@@ -4,7 +4,72 @@ PRD §6.12 acceptance criteria + brainstorm additions.
 The X6.3 T/EM test is the single most important test in the entire suite.
 """
 
+import math
+from datetime import datetime, timezone
+
 import pytest
+
+from aruna.l2_physics.models import (
+    PhysicsFrame, PhysicsQuality, EngineState, FitResult, HOPEResult, PhysicsConfig
+)
+from aruna.models.observation import QualityFlag
+
+
+def _make_frame(**overrides):
+    defaults = dict(
+        frame_id="f1", timestamp=datetime.now(timezone.utc),
+        source_frame_ids=["a", "b"],
+        T_MK=15.0, T_uncertainty_MK=1.0, EM_cm3=1e48, EM_uncertainty=1e46,
+        fit_chi_squared=1.2,
+        DNI=0.5, tnpsv_magnitude=0.1, tnpsv_angle_rad=1.2,
+        SHEI=-1.0, dSHEI_dt=0.01, HFD=float('nan'),
+        QPP_period_sec=None, QPP_amplitude=None, FeKa_flux=0.0,
+        flare_phase="QUIET", hope_flag=False,
+        hope_lead_time_sec=None, hope_reason=None,
+        engine_state="WARMUP",
+        data_quality_flag=QualityFlag.GOOD,
+        physics_quality_flag=PhysicsQuality.FIT_OK,
+        fit_backend="chianti_lookup",
+        pipeline_version="2.0.0",
+    )
+    defaults.update(overrides)
+    return PhysicsFrame(**defaults)
+
+
+class TestModels:
+    def test_physics_quality_enum(self):
+        assert PhysicsQuality.FIT_OK == 0
+        assert PhysicsQuality.FIT_DIVERGED == 1
+        assert PhysicsQuality.LOW_CONFIDENCE == 2
+        assert PhysicsQuality.BACKEND_FALLBACK == 3
+
+    def test_engine_state_enum(self):
+        assert EngineState.WARMUP.value == "WARMUP"
+        assert EngineState.ACTIVE.value == "ACTIVE"
+        assert EngineState.DEGRADED.value == "DEGRADED"
+
+    def test_fit_result(self):
+        r = FitResult(T_MK=15.0, EM_cm3=1e48, T_uncertainty_MK=1.0,
+                      EM_uncertainty=1e46, chi2_reduced=1.2, backend="chianti_lookup")
+        assert r.T_MK == 15.0
+        assert r.backend == "chianti_lookup"
+
+    def test_hope_result(self):
+        r = HOPEResult(hope_flag=True, reason="test", lead_time_sec=120)
+        assert r.hope_flag is True
+
+    def test_physics_frame_construction(self):
+        f = _make_frame()
+        assert f.flare_phase == "QUIET"
+        assert f.schema_version == "1.0"
+        assert f.pipeline_version == "2.0.0"
+        assert math.isnan(f.HFD)
+
+    def test_physics_config_defaults(self):
+        cfg = PhysicsConfig()
+        assert cfg.fit_energy_min_kev == 3.0
+        assert cfg.hope_dni_threshold == 1.5
+        assert cfg.hfd_window == 600
 
 
 @pytest.mark.xfail(reason="Phase 3 not yet implemented", strict=False)

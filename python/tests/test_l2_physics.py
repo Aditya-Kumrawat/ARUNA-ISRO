@@ -137,6 +137,87 @@ def test_no_div_zero_or_nan_propagation():
 
 import numpy as np
 from aruna.l2_physics.chianti_table import CHIANTILookupTable
+from aruna.l2_physics.dni import DNIComputer
+from aruna.l2_physics.tnpsv import TNPSVComputer
+from aruna.l2_physics.shei import SHEIComputer
+
+
+class TestDNIComputer:
+    def test_accumulates_correctly(self):
+        dni = DNIComputer()
+        v = dni.update(hel_25_50_flux=2.0, sol_8_15_flux=1.0, dt=1.0)
+        assert v == pytest.approx(2.0, rel=1e-6)
+        v2 = dni.update(hel_25_50_flux=2.0, sol_8_15_flux=1.0, dt=1.0)
+        assert v2 == pytest.approx(4.0, rel=1e-6)
+
+    def test_reset_zeroes_accumulator(self):
+        dni = DNIComputer()
+        dni.update(5.0, 1.0)
+        dni.reset()
+        v = dni.update(1.0, 1.0)
+        assert v == pytest.approx(1.0, rel=1e-6)
+
+    def test_no_div_zero_on_zero_solexs(self):
+        dni = DNIComputer()
+        v = dni.update(1.0, 0.0)
+        assert np.isfinite(v)
+
+
+class TestTNPSVComputer:
+    def test_returns_zero_on_insufficient_history(self):
+        c = TNPSVComputer()
+        mag, ang = c.update(10.0, 1e47)
+        assert mag == 0.0 and ang == 0.0
+
+    def test_rising_T_flat_EM_angle_near_zero(self):
+        c = TNPSVComputer()
+        for t in np.linspace(10.0, 20.0, 10):
+            mag, ang = c.update(t, 1e48)
+        # dT/dt > 0, dEM/dt ~ 0 → angle near 0 (atan2(~0, positive))
+        assert mag > 0
+        assert abs(ang) < np.deg2rad(30)
+
+    def test_magnitude_positive(self):
+        c = TNPSVComputer()
+        for t in np.linspace(5.0, 25.0, 5):
+            mag, ang = c.update(t, 1e48)
+        assert mag >= 0
+
+
+class TestSHEIComputer:
+    def _make_hel_frame(self, hard_flux=10.0, soft_flux=1.0):
+        bins = np.linspace(5.0, 80.0, 33)   # 32 bins
+        centres = (bins[:-1] + bins[1:]) / 2.0
+        counts = np.zeros(32)
+        counts[(centres >= 40) & (centres <= 70)] = hard_flux
+        counts[(centres >= 10) & (centres <= 25)] = soft_flux
+        from aruna.models.observation import ObservationFrame, QualityFlag
+        from datetime import datetime, timezone
+        return ObservationFrame(
+            instrument="HEL1OS_CDTE", timestamp=datetime.now(timezone.utc),
+            energy_bins_kev=bins, counts_per_s_kev=counts,
+            quality_flag=QualityFlag.GOOD, dead_time_fraction=0.0,
+            calibration_version="test", solar_distance_au=1.0,
+            spacecraft_mode="SCIENCE", saa_flag=False,
+            source_file="test.fits", checksum_sha256="abc",
+            pipeline_version="2.0.0",
+        )
+
+    def test_hard_dominated_shei_above_threshold(self):
+        c = SHEIComputer()
+        shei, _ = c.update_single(self._make_hel_frame(hard_flux=100.0, soft_flux=1.0))
+        assert shei > -0.8
+
+    def test_soft_dominated_shei_below_threshold(self):
+        c = SHEIComputer()
+        shei, _ = c.update_single(self._make_hel_frame(hard_flux=0.01, soft_flux=100.0))
+        assert shei < -1.5
+
+    def test_dshei_dt_nonzero_after_two_frames(self):
+        c = SHEIComputer()
+        c.update_single(self._make_hel_frame(hard_flux=1.0, soft_flux=10.0))
+        _, dshei = c.update_single(self._make_hel_frame(hard_flux=50.0, soft_flux=10.0))
+        assert dshei != 0.0
 
 
 class TestCHIANTITable:
@@ -174,3 +255,63 @@ class TestCHIANTITable:
         mean_e_cold = np.average(centres, weights=spec_cold + 1e-30)
         mean_e_hot  = np.average(centres, weights=spec_hot  + 1e-30)
         assert mean_e_hot > mean_e_cold
+
+
+from aruna.l2_physics.hfd import HFDComputer
+from aruna.l2_physics.qpp import QPPDetector
+
+
+class TestHFDComputer:
+    def test_nan_during_warmup(self):
+        h = HFDComputer(window=600)
+        for _ in range(599):
+            val = h.update(1.0)
+        assert np.isnan(val)
+
+    def test_returns_float_after_window_fills(self):
+        h = HFDComputer(window=50, k_max=5)
+        for _ in range(49):
+            h.update(float(np.random.rand()))
+        val = h.update(float(np.random.rand()))
+        assert np.isnan(val)
+        val = h.update(float(np.random.rand()))
+        assert not np.isnan(val)
+        assert 1.0 <= val <= 2.0
+
+    def test_sine_hfd_near_one(self):
+        h = HFDComputer(window=100, k_max=5)
+        t = np.linspace(0, 10 * np.pi, 200)
+        for x in np.sin(t):
+            val = h.update(float(x))
+        assert not np.isnan(val)
+        assert val < 1.5
+
+    def test_noise_hfd_above_sine(self):
+        rng = np.random.default_rng(42)
+        h_sine  = HFDComputer(window=100, k_max=5)
+        h_noise = HFDComputer(window=100, k_max=5)
+        t = np.linspace(0, 10 * np.pi, 200)
+        sine_val = noise_val = np.nan
+        for i, x in enumerate(t):
+            sine_val  = h_sine.update(float(np.sin(x)))
+            noise_val = h_noise.update(float(rng.standard_normal()))
+        assert not np.isnan(sine_val) and not np.isnan(noise_val)
+        assert noise_val > sine_val
+
+
+class TestQPPDetector:
+    def test_none_during_warmup(self):
+        q = QPPDetector(window=200, min_frames=50)
+        for _ in range(49):
+            period, amp = q.update(1.0)
+        assert period is None and amp is None
+
+    def test_detects_injected_period(self):
+        q = QPPDetector(window=200, min_frames=50)
+        t = np.linspace(0, 200, 200)
+        signal = 10.0 + 3.0 * np.sin(2 * np.pi * t / 30.0)
+        period = amp = None
+        for x in signal:
+            period, amp = q.update(float(x))
+        if period is not None:
+            assert 20 < period < 45

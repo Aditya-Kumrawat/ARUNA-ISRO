@@ -214,3 +214,161 @@ class TestGOESClassifier:
         assert gc.is_major_xclass("X", 3.0) is True
         assert gc.is_major_xclass("X", 2.9) is False
         assert gc.is_major_xclass("M", 9.0) is False
+
+
+class TestConsensusEngine:
+    def _engine(self, **kwargs):
+        from aruna.l3_nowcasting.consensus import ConsensusEngine
+        from aruna.l3_nowcasting.models import NowcastConfig
+        return ConsensusEngine(NowcastConfig(**kwargs))
+
+    def _ts(self, offset_sec=0):
+        return datetime(2024, 2, 22, 4, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=offset_sec)
+
+    def test_initial_state_is_quiet(self):
+        assert self._engine().state == "QUIET"
+
+    def test_hope_flag_emits_precursor(self):
+        engine = self._engine()
+        frame = _make_physics_frame(timestamp=self._ts(), hope_flag=True,
+                                    hope_reason="T rising", hope_lead_time_sec=120)
+        event = engine.ingest(False, False, True, "T rising", frame, 500.0, 100.0)
+        assert event is not None
+        assert event.alert_type == "HOPE_PRECURSOR"
+        assert event.detection_method == "HOPE"
+        assert engine.state == "HOPE"
+
+    def test_hope_fires_only_once(self):
+        engine = self._engine()
+        frame = _make_physics_frame(timestamp=self._ts(), hope_flag=True)
+        engine.ingest(False, False, True, None, frame, 500.0, 100.0)
+        event2 = engine.ingest(False, False, True, None,
+                                _make_physics_frame(timestamp=self._ts(1), hope_flag=True),
+                                500.0, 100.0)
+        assert event2 is None  # second hope frame → no duplicate
+
+    def test_solexs_only_no_confirmed_onset(self):
+        engine = self._engine()
+        for i in range(200):
+            event = engine.ingest(True, False, False, None,
+                                  _make_physics_frame(timestamp=self._ts(i)),
+                                  5000.0, 100.0)
+            if event is not None:
+                assert event.detection_method != "DUAL_TRIGGER"
+
+    def test_dual_trigger_within_window_fires_onset(self):
+        engine = self._engine(dual_trigger_window_sec=180)
+        # SoLEXS triggers at t=0
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(0)), 5000.0, 100.0)
+        # HEL1OS triggers at t=30 (within 180s)
+        event = engine.ingest(False, True, False, None,
+                               _make_physics_frame(timestamp=self._ts(30)), 5000.0, 500.0)
+        assert event is not None
+        assert event.alert_type == "FLARE_ONSET"
+        assert event.detection_method == "DUAL_TRIGGER"
+
+    def test_dual_trigger_outside_window_no_onset(self):
+        engine = self._engine(dual_trigger_window_sec=180)
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(0)), 5000.0, 100.0)
+        event = engine.ingest(False, True, False, None,
+                               _make_physics_frame(timestamp=self._ts(200)), 5000.0, 500.0)
+        assert event is None
+
+    def test_full_lifecycle_quiet_hope_onset_peak_end(self):
+        engine = self._engine(dual_trigger_window_sec=180, peak_decay_threshold=0.5)
+        events = []
+        # HOPE
+        e = engine.ingest(False, False, True, "T rising",
+                          _make_physics_frame(timestamp=self._ts(0), hope_flag=True),
+                          600.0, 110.0)
+        if e: events.append(e)
+        # Dual trigger at t=1 (both instruments within window)
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(1)), 5000.0, 1000.0)
+        e = engine.ingest(False, True, False, None,
+                          _make_physics_frame(timestamp=self._ts(2)), 5000.0, 1500.0)
+        if e: events.append(e)
+        assert engine.state == "ONSET"
+        # Rising flux (5 frames)
+        for i in range(3, 8):
+            e = engine.ingest(False, False, False, None,
+                              _make_physics_frame(timestamp=self._ts(i)),
+                              5000.0 + i * 1000, 1500.0 + i * 100)
+            if e: events.append(e)
+        # 3 consecutive declining frames → FLARE_PEAK
+        peak_sol = 5000.0 + 7 * 1000
+        for j in range(3):
+            e = engine.ingest(False, False, False, None,
+                              _make_physics_frame(timestamp=self._ts(8 + j)),
+                              peak_sol - (j + 1) * 1000, 1000.0)
+            if e: events.append(e)
+        assert any(ev.alert_type == "FLARE_PEAK" for ev in events), f"events={[ev.alert_type for ev in events]}"
+        # Flux < 50% of peak → FLARE_END
+        e = engine.ingest(False, False, False, None,
+                          _make_physics_frame(timestamp=self._ts(12)),
+                          100.0, 10.0)
+        if e: events.append(e)
+        assert any(ev.alert_type == "FLARE_END" for ev in events)
+        assert engine.state == "QUIET"
+
+    def test_overlapping_flare_distinct_event_ids(self):
+        engine = self._engine(dual_trigger_window_sec=180, peak_decay_threshold=0.5)
+        # Get to PEAK state
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(0)), 5000.0, 1000.0)
+        engine.ingest(False, True, False, None,
+                      _make_physics_frame(timestamp=self._ts(1)), 5000.0, 1500.0)
+        first_onset_id = None
+        for i in range(2, 8):
+            e = engine.ingest(False, False, False, None,
+                              _make_physics_frame(timestamp=self._ts(i)),
+                              5000.0 + i * 1000, 1500.0)
+            if e and e.alert_type == "FLARE_ONSET":
+                first_onset_id = e.event_id
+        # force to PEAK via 3 declining
+        peak_sol = 5000.0 + 7 * 1000
+        for j in range(3):
+            engine.ingest(False, False, False, None,
+                          _make_physics_frame(timestamp=self._ts(8 + j)),
+                          peak_sol - (j+1)*500, 1000.0)
+        assert engine.state == "PEAK"
+        # New dual trigger during PEAK → overlapping
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(12)), 8000.0, 2000.0)
+        e2 = engine.ingest(False, True, False, None,
+                           _make_physics_frame(timestamp=self._ts(13)), 8000.0, 2500.0)
+        assert e2 is not None
+        assert e2.alert_type == "FLARE_ONSET"
+        assert e2.flare_type == "OVERLAPPING"
+        if first_onset_id:
+            assert e2.event_id != first_onset_id
+
+    def test_x3_escalated_to_confidence_1(self):
+        engine = self._engine(x3_auto_critical=True, solexs_to_wm2_factor=1.0e-8)
+        # 5.0e-4 W/m² → X5.0 (major X-class)
+        flux_x5 = 5.0e-4 / 1.0e-8
+        engine.ingest(True, False, False, None,
+                      _make_physics_frame(timestamp=self._ts(0)), flux_x5, 1000.0)
+        event = engine.ingest(False, True, False, None,
+                               _make_physics_frame(timestamp=self._ts(1)), flux_x5, 2000.0)
+        assert event is not None
+        assert event.goes_class == "X"
+        assert event.confidence == pytest.approx(1.0)
+
+    def test_sep_event_on_high_kp(self):
+        engine = self._engine(sep_kp_threshold=6)
+        event = engine.ingest(True, False, False, None,
+                               _make_physics_frame(timestamp=self._ts(0)),
+                               5000.0, 100.0, kp_index=8.0)
+        assert event is not None
+        assert event.detection_method == "SEP_EVENT"
+
+    def test_provenance_hash_copied_from_frame(self):
+        engine = self._engine()
+        frame = _make_physics_frame(timestamp=self._ts(), hope_flag=True,
+                                    provenance_hash="myspecialhash")
+        event = engine.ingest(False, False, True, None, frame, 500.0, 100.0)
+        assert event is not None
+        assert event.provenance_hash == "myspecialhash"

@@ -1,0 +1,271 @@
+# ARUNA Configuration Reference — PRD §24
+# Copy to config/config.yaml and fill in secrets.
+# DO NOT hardcode any of these values in source code.
+# All thresholds configurable here without code changes.
+
+pipeline:
+  version: "2.0.0"
+  environment: "development"    # development | production | demo
+  log_level: "INFO"             # DEBUG | INFO | WARNING | ERROR | CRITICAL
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+data:
+  pradan:
+    base_url: "https://pradan1.issdc.gov.in"
+    # Auth is session-cookie based — set PRADAN_COOKIES env var (hot-reload via SIGHUP)
+    # No username/password: log into PRADAN in browser, copy download script cookies
+    retry_count: 3
+    retry_backoff_sec: [1, 2, 4]
+    timeout_sec: 120
+    health_check_interval_sec: 30
+    offline_fallback_after_sec: 300     # 5 minutes
+    keepalive_interval_min: 10          # ping /payload.xhtml to keep session alive
+    keepalive_max_cycles: 144           # 144 × 10min = 24h max session
+    download_delay_sec: 2.0             # min delay between PRADAN requests (rate-limit)
+
+  manifest_watch_dir: "data/manifests/"  # drop PRADAN .sh scripts here for auto-ingest
+
+  noaa_fallback_url: "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
+  goes_xrs_s3_bucket: "noaa-goes16"
+
+  cache:
+    path: "data/cache"
+    max_size_gb: 50
+    retention_hours: 48
+    checksum_algorithm: "sha256"
+
+# ── L1 Data Ingestion ────────────────────────────────────────────────────────
+ingestion:
+  completeness_threshold: 0.80        # fraction of non-null per 60-second window
+  saa_mask: true                      # mask SAA-coincident bins
+  quarantine_duration_sec: 300        # hold partial FITS before retry
+
+  dead_time_constants:                # non-paralysable model, Sarwade et al. 2025 Table 2
+    SOLEXS_SDD1: 4.5e-6               # seconds
+    SOLEXS_SDD2: 4.5e-6
+    HEL1OS_CDTE: 2.1e-6
+    HEL1OS_CZT:  1.8e-6
+
+  saturation_limits:
+    SOLEXS_SDD1: 5.0e4                # counts/s — above this, switch to SDD2
+    SOLEXS_SDD2: 5.0e6                # counts/s — X10+ events approach this
+
+  background_subtraction:
+    pre_event_window_min: 5           # quiet window before event for HEL1OS background
+    chi_squared_limit: 2.0            # residuals must be consistent with Poisson noise
+
+  time_alignment:
+    max_lag_sec: 1.0                  # assert lag < 1 second between instruments
+    overlap_band_kev: [10, 15]        # SoLEXS / HEL1OS overlap band for cross-correlation
+    interpolation_method: "cubic"
+
+  goes_label_join:
+    match_window_min: 3               # ± 3 minutes
+    class_tolerance: 1                # within 1 sub-class
+
+# ── L2 Physics Engine ────────────────────────────────────────────────────────
+physics:
+  isothermal_fit:
+    energy_range_kev: [3.0, 20.0]
+    abundance_table: "coronal"        # CHIANTI standard
+    model: "f_vth"                    # sunkit-spex model identifier
+    chi_squared_limit: 2.0            # target < 2.0 per PRD §6.12
+
+  dni:
+    hel1os_band_kev: [25, 50]         # non-thermal integration band
+    solexs_band_kev: [8, 15]          # thermal reference band
+    epsilon: 1.0e-30                  # division guard
+    hope_threshold: 1.5               # DNI > 1.5 → HOPE condition satisfied
+
+  tnpsv:
+    hope_speed_threshold: 0.05        # normalised speed for precursor quadrant
+    hope_angle_min_deg: 60            # T rising, EM flat sector
+    hope_angle_max_deg: 120
+
+  shei:
+    hard_band_kev: [40, 70]
+    soft_band_kev: [10, 25]
+    thermal_threshold: -1.5           # SHEI < -1.5 → thermal dominated
+    impulsive_threshold: -0.8         # SHEI > -0.8 → nonthermal dominated
+
+  hfd:
+    k_max: 10
+    window_sec: 600                   # 10-minute sliding window
+    quiet_sun_range: [1.3, 1.5]       # expected HFD in quiet Sun
+
+  qpp:
+    scale_min: 5
+    scale_max: 200
+    noise_percentile: 99
+    lowess_frac: 0.3
+
+  feka:
+    line_kev_low: 6.2
+    line_kev_high: 6.6
+
+  hope:
+    t_rising_min_seconds: 3           # T must rise for ≥ 3 consecutive seconds
+    em_rise_threshold: 1.0e46         # cm^-3/s — above this, EM is "rising"
+    hel1os_quiet_multiplier: 2.0      # HEL1OS must be < 2× quiet baseline
+    lead_time_base_sec: 90            # empirical lead time estimate base
+    lead_time_slope: 2                # × history_len correction factor
+
+# ── L3 Nowcasting Engine ─────────────────────────────────────────────────────
+nowcasting:
+  baseline:
+    window_sec: 10800                 # 3-hour P85 window
+    percentile: 85
+    recompute_interval_sec: 60
+
+  trigger:
+    sigma_multiplier: 3.0             # flux must exceed baseline + 3σ
+    dual_trigger_window_sec: 180      # both instruments must trigger within 3 min
+
+  pelt:
+    penalty: 1.5
+    min_size: 10
+    model: "rbf"
+
+  classification:
+    # GOES 1-8 Å equivalent thresholds in W/m²
+    x_threshold: 1.0e-4
+    m_threshold: 1.0e-5
+    c_threshold: 1.0e-6
+    b_threshold: 1.0e-7
+
+  escalation:
+    x3_auto_critical: true            # X3+ → CRITICAL regardless of confidence
+    sep_kp_threshold: 6               # Kp > 6 + no SoLEXS precursor → SEP_EVENT
+
+  long_duration_event:
+    max_hours: 6                      # lock baseline for up to 6 hours
+
+# ── L4 Forecasting Engine ────────────────────────────────────────────────────
+forecasting:
+  sequence_length_sec: 600            # 10-minute input window (600 frames at 1s cadence)
+  forecast_horizons_min: [5, 10, 15, 30, 60]
+  n_features: 24
+
+  ensemble:
+    tcn_weight: 0.5
+    moirai_weight: 0.5
+    moirai_context_length: 512        # clip to last 512 if window exceeds
+    moirai_fallback_tcn_weight: 0.7   # TCN weight when Moirai context clipped
+
+  loss:
+    alpha: 0.2                        # under-prediction penalty weight (4× over-prediction)
+    gamma: 2.0                        # focal loss focusing parameter
+
+  mapie:
+    coverage: 0.90                    # 90% conformal coverage
+    alpha: 0.10
+
+  temporal_split:                     # STRICT — no random shuffling ever
+    train_start: "2023-09-02"
+    train_end:   "2024-06-30"
+    val_start:   "2024-07-01"
+    val_end:     "2024-12-31"
+    test_start:  "2025-01-01"
+    test_end:    "2025-06-30"
+    buffer_hours: 24                  # minimum gap between train and val events
+
+# ── L5 Historical Analog Retrieval ───────────────────────────────────────────
+analogs:
+  top_k_faiss: 10                     # FAISS candidates before DTW refinement
+  top_k_return: 3                     # final analogs returned
+  no_analog_sigma: 3.0                # DTW > 3σ above library mean → NO_ANALOG
+  feature_keys: ["T_MK", "EM_cm3", "DNI", "SHEI"]
+  index_path: "models/faiss_analog.index"
+
+# ── L6 Threat Intelligence ───────────────────────────────────────────────────
+threat:
+  # NavIC L5 band risk thresholds (S4 scintillation index)
+  navic:
+    negligible_s4: 0.0
+    low_s4: 0.15
+    moderate_s4: 0.30
+    high_s4: 0.55
+    very_high_s4: 0.67
+    extreme_s4: 0.90
+
+  # False-safety guard: X-class impact must never be under-stated
+  enforce_no_false_safety: true
+
+# ── L7 LLM Briefing ──────────────────────────────────────────────────────────
+llm:
+  provider: "azure"                   # azure | ollama | mock
+  model: "gpt-4-1-mini"              # Azure deployment name
+  api_version: "2024-12-01-preview"
+  endpoint: "${AZURE_OPENAI_ENDPOINT:-https://uaenorth.api.cognitive.microsoft.com/}"
+  # api_key: set via AZURE_OPENAI_API_KEY env var — NEVER hardcode here
+  max_tokens: 400
+  temperature: 0.1
+  structured_output: true
+  hallucination_lead_time_tolerance_min: 2
+  max_novel_numbers_allowed: 3        # allow small integers like dates
+
+  # Ollama fallback (air-gapped / offline)
+  ollama_model: "mistral:7b-instruct"
+  ollama_host: "${OLLAMA_HOST:-http://localhost:11434}"
+
+# ── Message bus (Kafka) ───────────────────────────────────────────────────────
+kafka:
+  bootstrap_servers: "${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
+  consumer_group: "aruna-pipeline"
+  retry_count: 3
+  retry_backoff_sec: [1, 2, 4]
+  dead_letter_topic: "aruna.dlq"
+  topics:
+    source_health:      "aruna.source.health"
+    observations_solexs: "aruna.observations.solexs"
+    observations_hel1os: "aruna.observations.hel1os"
+    physics_frames:     "aruna.physics.frames"
+    nowcast_events:     "aruna.nowcast.events"
+    forecast_frames:    "aruna.forecast.frames"
+    analog_results:     "aruna.analogs.results"
+    threat_output:      "aruna.threat.output"
+    alert_briefings:    "aruna.alerts.briefings"
+    xl_ar_state:        "aruna.xl.ar_state"
+    xl_mpci:            "aruna.xl.mpci"
+    xl_features:        "aruna.xl.features"
+    xl_forecast:        "aruna.xl.forecast"
+    xl_impact:          "aruna.xl.impact"
+    ingestion_errors:   "aruna.ingestion.errors"
+
+# ── Database ──────────────────────────────────────────────────────────────────
+database:
+  type: "sqlite"                      # sqlite | postgresql
+  sqlite_path: "data/aruna.db"
+  postgresql_url: "${DATABASE_URL}"
+
+# ── MLflow ───────────────────────────────────────────────────────────────────
+mlflow:
+  tracking_uri: "${MLFLOW_TRACKING_URI:-http://localhost:5000}"
+  experiment_name: "aruna-bah2026"
+
+# ── Model paths ───────────────────────────────────────────────────────────────
+models:
+  tcn_weights: "models/tcn_v1.pt"
+  mapie_calibration: "models/mapie_calibration.pkl"
+  faiss_index: "models/faiss_analog.index"
+  contrastive_encoder: "models/contrastive_encoder.pt"
+
+# ── Validation ────────────────────────────────────────────────────────────────
+validation:
+  ground_truth_match_window_min: 3
+  bootstrap_resamples: 2000
+  # XL-6 self-correction triggers
+  tss_alert_threshold: 0.55
+  far_alert_threshold: 0.08
+  kappa_alert_threshold: 0.50
+  ece_alert_threshold: 0.10
+  quiet_sun_false_alarm_48h_limit: 2
+  ar_registry_coverage_min: 0.85
+  mpci_6h_mean_min: 0.40
+  submodel_prob_spread_max: 0.40
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+monitoring:
+  prometheus_port: 9090
+  health_endpoint_port: 8000
+  structlog_format: "json"            # json | console

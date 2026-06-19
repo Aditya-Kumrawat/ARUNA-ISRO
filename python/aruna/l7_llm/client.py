@@ -53,14 +53,27 @@ class MockLLMClient:
 class AzureLangChainClient:
     """
     Calls Azure OpenAI via langchain_openai.AzureChatOpenAI.
-    Requires env vars: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY.
+
+    Required env vars:
+      AZURE_OPENAI_ENDPOINT   = https://uaenorth.api.cognitive.microsoft.com/
+      AZURE_OPENAI_API_KEY    = <your key>
+
+    Optional env vars (override constructor defaults):
+      AZURE_OPENAI_API_VERSION      = 2024-12-01-preview
+      AZURE_OPENAI_MINI_DEPLOYMENT  = gpt-4-1-mini
     """
-    def __init__(self, model: str = "gpt-4.1-mini", api_version: str = "2024-02-01",
-                 temperature: float = 0.1, max_tokens: int = 400) -> None:
-        self.model = model
-        self.api_version = api_version
+    def __init__(
+        self,
+        model: str = "gpt-4-1-mini",
+        api_version: str = "2024-12-01-preview",
+        temperature: float = 0.1,
+        max_tokens: int = 400,
+    ) -> None:
+        # Env vars override constructor args
+        self.model       = os.environ.get("AZURE_OPENAI_MINI_DEPLOYMENT", model)
+        self.api_version = os.environ.get("AZURE_OPENAI_API_VERSION", api_version)
         self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.max_tokens  = max_tokens
 
     def generate(self, system_prompt: str, user_prompt: str, ctx: BriefingContext) -> BriefingJSON:
         try:
@@ -70,7 +83,7 @@ class AzureLangChainClient:
             raise BriefingLLMError("langchain-openai not installed") from exc
 
         endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        api_key  = os.environ.get("AZURE_OPENAI_API_KEY")
         if not endpoint or not api_key:
             raise BriefingLLMError(
                 "AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY must be set"

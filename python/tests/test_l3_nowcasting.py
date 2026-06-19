@@ -372,3 +372,70 @@ class TestConsensusEngine:
         event = engine.ingest(False, False, True, None, frame, 500.0, 100.0)
         assert event is not None
         assert event.provenance_hash == "myspecialhash"
+
+
+class TestCatalogService:
+    def _event(self, alert_type="FLARE_ONSET", event_id=None):
+        from aruna.models.nowcast import NowcastEvent
+        e = NowcastEvent(
+            alert_type=alert_type,
+            timestamp=datetime(2024, 2, 22, 4, 0, 0, tzinfo=timezone.utc),
+            goes_class="X", goes_subclass=6.3,
+            confidence=0.9,
+            instruments=["SOLEXS", "HEL1OS"],
+            physics_frame_id="frame123",
+            detection_method="DUAL_TRIGGER" if alert_type != "HOPE_PRECURSOR" else "HOPE",
+            flare_type="STANDARD",
+            provenance_hash="abc123hash",
+        )
+        if event_id:
+            e.event_id = event_id
+        return e
+
+    def test_write_under_100ms(self, tmp_path):
+        import time
+        from aruna.l3_nowcasting.catalog import CatalogService
+        cat = CatalogService(f"sqlite:///{tmp_path}/test.db")
+        event = self._event()
+        start = time.perf_counter()
+        cat.write(event)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert elapsed_ms < 100, f"Write took {elapsed_ms:.1f}ms"
+        cat.close()
+
+    def test_upsert_idempotent(self, tmp_path):
+        from aruna.l3_nowcasting.catalog import CatalogService
+        cat = CatalogService(f"sqlite:///{tmp_path}/test.db")
+        event = self._event()
+        cat.write(event)
+        cat.write(event)
+        count = cat._conn.execute(
+            "SELECT COUNT(*) FROM master_flare_catalog WHERE event_id=?",
+            (event.event_id,)
+        ).fetchone()[0]
+        assert count == 1
+        cat.close()
+
+    def test_provenance_hash_stored(self, tmp_path):
+        from aruna.l3_nowcasting.catalog import CatalogService
+        cat = CatalogService(f"sqlite:///{tmp_path}/test.db")
+        event = self._event()
+        cat.write(event)
+        row = cat.fetch_event(event.event_id)
+        assert row is not None
+        assert row["provenance_hash"] == "abc123hash"
+        cat.close()
+
+    def test_lifecycle_fills_timestamps(self, tmp_path):
+        from aruna.l3_nowcasting.catalog import CatalogService
+        cat = CatalogService(f"sqlite:///{tmp_path}/test.db")
+        eid = "fixed-test-event-id"
+        for alert_type in ("HOPE_PRECURSOR", "FLARE_ONSET", "FLARE_PEAK", "FLARE_END"):
+            e = self._event(alert_type=alert_type, event_id=eid)
+            cat.write(e, peak_T_MK=23.5, peak_flux_solexs=15000.0)
+        row = cat.fetch_event(eid)
+        assert row["hope_time"] is not None
+        assert row["onset_time"] is not None
+        assert row["peak_time"] is not None
+        assert row["end_time"] is not None
+        cat.close()

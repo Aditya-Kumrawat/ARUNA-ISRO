@@ -171,3 +171,46 @@ class TestChangepointDetector:
             result = d.update(1.0 if i < 50 else 100.0)
         if result is not None:
             assert isinstance(result, int)
+
+
+class TestGOESClassifier:
+    def _gc(self):
+        from aruna.l3_nowcasting.goes_class import GOESClassifier
+        return GOESClassifier(solexs_to_wm2_factor=1.0e-8)
+
+    def test_x_class(self):
+        counts = 1.25e-4 / 1.0e-8   # → 1.25e-4 W/m² → X1.2
+        letter, sub = self._gc().classify(counts)
+        assert letter == "X"
+        assert sub == pytest.approx(1.2, rel=0.05)
+
+    def test_m38_class(self):
+        counts = 3.8e-5 / 1.0e-8    # M3.8
+        letter, sub = self._gc().classify(counts)
+        assert letter == "M"
+        assert sub == pytest.approx(3.8, rel=0.01)
+
+    def test_c_class(self):
+        counts = 5.0e-6 / 1.0e-8    # C5.0
+        letter, sub = self._gc().classify(counts)
+        assert letter == "C"
+
+    def test_b_class(self):
+        counts = 5.0e-7 / 1.0e-8    # B5.0
+        letter, sub = self._gc().classify(counts)
+        assert letter == "B"
+
+    def test_sub_a(self):
+        letter, sub = self._gc().classify(0.001)
+        assert letter == "A"
+
+    def test_zero_flux(self):
+        letter, sub = self._gc().classify(0.0)
+        assert letter == "A"
+        assert sub == 0.0
+
+    def test_x3_is_major(self):
+        gc = self._gc()
+        assert gc.is_major_xclass("X", 3.0) is True
+        assert gc.is_major_xclass("X", 2.9) is False
+        assert gc.is_major_xclass("M", 9.0) is False

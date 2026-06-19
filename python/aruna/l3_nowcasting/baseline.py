@@ -48,6 +48,18 @@ class RollingP85Baseline:
     def is_frozen(self) -> bool:
         return self._frozen
 
+    def clear(self) -> None:
+        """Clear the rolling window and reset cached baseline/threshold.
+
+        Call after a flare ends so the window is not contaminated by
+        the elevated flare flux, which would suppress the threshold on
+        the next quiet period.
+        """
+        self._window.clear()
+        self._baseline = None
+        self._threshold = None
+        self._last_recompute = -self._recompute_interval
+
     @property
     def baseline(self) -> Optional[float]:
         return self._baseline

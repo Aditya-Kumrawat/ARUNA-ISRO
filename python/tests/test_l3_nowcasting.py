@@ -439,3 +439,208 @@ class TestCatalogService:
         assert row["peak_time"] is not None
         assert row["end_time"] is not None
         cat.close()
+
+
+# ── Task 7: NowcastOrchestrator integration tests ────────────────────────────
+
+class TestNowcastOrchestrator:
+    def _run(self, frames, config):
+        from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
+        orch = NowcastOrchestrator(config=config)
+        events = []
+        for f in frames:
+            e = orch.process(f)
+            if e is not None:
+                events.append(e)
+        orch.close()
+        return events
+
+    def test_x63_detected_within_30s(self, synthetic_physics_frames, test_nowcast_config):
+        """Detection of onset must occur within 30s of the synthetic GOES onset time."""
+        # GOES onset defined as the first frame of the rise phase (frame 250)
+        goes_onset_time = synthetic_physics_frames[250].timestamp
+        events = self._run(synthetic_physics_frames, test_nowcast_config)
+        onsets = [e for e in events if e.alert_type == "FLARE_ONSET"
+                  and e.detection_method == "DUAL_TRIGGER"]
+        assert onsets, "No DUAL_TRIGGER FLARE_ONSET emitted"
+        detection_delay = (onsets[0].timestamp - goes_onset_time).total_seconds()
+        assert detection_delay <= 30, f"Detection delay {detection_delay:.1f}s > 30s"
+
+    def test_hope_fires_90s_before_peak(self, synthetic_physics_frames, test_nowcast_config):
+        """HOPE_PRECURSOR must fire >= 90s before FLARE_PEAK."""
+        events = self._run(synthetic_physics_frames, test_nowcast_config)
+        hope_events = [e for e in events if e.alert_type == "HOPE_PRECURSOR"]
+        peak_events = [e for e in events if e.alert_type == "FLARE_PEAK"]
+        assert hope_events, "No HOPE_PRECURSOR emitted"
+        assert peak_events, "No FLARE_PEAK emitted"
+        lead = (peak_events[0].timestamp - hope_events[0].timestamp).total_seconds()
+        assert lead >= 90, f"HOPE lead time {lead:.1f}s < 90s"
+
+    def test_tpr_far_tss_synthetic_injection(self, test_nowcast_config):
+        """TPR > 0.80, FAR < 0.05, TSS > 0.65 on synthetic M+X flares."""
+        from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
+        import uuid
+
+        rng = np.random.default_rng(99)
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        def quiet_frame(i, t):
+            return _make_physics_frame(
+                timestamp=t, solexs_flux=500 + rng.normal(0, 15),
+                hel_flux=100 + rng.normal(0, 5),
+                provenance_hash=f"q{i}", frame_id=str(uuid.uuid4()),
+            )
+
+        def flare_burst(start_t, peak_sol=40000.0):
+            """20 quiet + 30 rise + 30 decay frames."""
+            frames = []
+            for j in range(20):
+                frames.append(_make_physics_frame(
+                    timestamp=start_t + timedelta(seconds=j),
+                    solexs_flux=500.0, hel_flux=100.0,
+                    provenance_hash=f"pre{j}", frame_id=str(uuid.uuid4()),
+                ))
+            for j in range(30):
+                frac = j / 30
+                frames.append(_make_physics_frame(
+                    timestamp=start_t + timedelta(seconds=20 + j),
+                    solexs_flux=500 + (peak_sol - 500) * frac,
+                    hel_flux=100 + 4900 * frac,
+                    SHEI=-1.6 + 2.0 * frac, dSHEI_dt=0.05,
+                    hope_flag=(j == 0),
+                    hope_reason="T rising" if j == 0 else None,
+                    hope_lead_time_sec=90 if j == 0 else None,
+                    provenance_hash=f"rise{j}", frame_id=str(uuid.uuid4()),
+                ))
+            for j in range(30):
+                decay = peak_sol * float(np.exp(-3 * j / 30))
+                frames.append(_make_physics_frame(
+                    timestamp=start_t + timedelta(seconds=50 + j),
+                    solexs_flux=decay, hel_flux=decay * 0.2,
+                    provenance_hash=f"dec{j}", frame_id=str(uuid.uuid4()),
+                ))
+            return frames
+
+        # 5 injected flares, each separated by quiet frames
+        n_flares = 5
+        all_frames = []
+        flare_windows = []
+        t = base
+        for fi in range(n_flares):
+            # 50 quiet frames
+            for qi in range(50):
+                all_frames.append(quiet_frame(len(all_frames), t))
+                t += timedelta(seconds=1)
+            flare_start = t
+            burst = flare_burst(flare_start, peak_sol=40000.0)
+            all_frames.extend(burst)
+            flare_windows.append((flare_start, flare_start + timedelta(seconds=80)))
+            t += timedelta(seconds=80)
+
+        orch = NowcastOrchestrator(config=test_nowcast_config)
+        detected_onsets = []
+        for f in all_frames:
+            e = orch.process(f)
+            if e is not None and e.alert_type == "FLARE_ONSET" and e.detection_method == "DUAL_TRIGGER":
+                detected_onsets.append(e.timestamp)
+        orch.close()
+
+        # TPR: fraction of injected flares detected
+        hits = sum(
+            any(w[0] <= dt <= w[1] for dt in detected_onsets)
+            for w in flare_windows
+        )
+        tpr = hits / n_flares
+
+        # FAR: false alarms in quiet-only segments (first 50 frames = pure quiet)
+        quiet_end = base + timedelta(seconds=50)
+        false_alarms = sum(dt < quiet_end for dt in detected_onsets)
+        n_quiet_windows = 1
+        far = false_alarms / n_quiet_windows
+
+        tss = tpr - far
+        assert tpr >= 0.80, f"TPR={tpr:.2f} < 0.80"
+        assert far < 0.05, f"FAR={far:.2f} >= 0.05"
+        assert tss >= 0.65, f"TSS={tss:.2f} < 0.65"
+
+    def test_all_events_have_provenance_hash(self, synthetic_physics_frames, test_nowcast_config):
+        events = self._run(synthetic_physics_frames, test_nowcast_config)
+        assert events, "No events emitted"
+        for e in events:
+            assert e.provenance_hash, f"Empty provenance_hash on {e.alert_type}"
+
+    def test_x3_plus_escalated_to_critical(self, test_nowcast_config):
+        """X3+ event (X5.0) must get confidence=1.0."""
+        from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
+        # X5.0: 5.0e-4 W/m² → counts = 5.0e-4 / 1e-8 = 50000
+        x5_sol = 50000.0
+        base = datetime(2024, 2, 22, tzinfo=timezone.utc)
+        orch = NowcastOrchestrator(config=test_nowcast_config)
+        # Establish baseline (200 quiet frames)
+        for i in range(200):
+            orch.process(_make_physics_frame(
+                timestamp=base + timedelta(seconds=i),
+                solexs_flux=500.0, hel_flux=100.0,
+                provenance_hash=f"q{i}",
+            ))
+        # Sol triggers at t=200
+        orch.process(_make_physics_frame(
+            timestamp=base + timedelta(seconds=200),
+            solexs_flux=x5_sol, hel_flux=100.0,
+            SHEI=-0.5, dSHEI_dt=0.1,
+            provenance_hash="x5_sol",
+        ))
+        # Hel triggers at t=201 (within 180s window)
+        event = orch.process(_make_physics_frame(
+            timestamp=base + timedelta(seconds=201),
+            solexs_flux=x5_sol, hel_flux=5000.0,
+            SHEI=-0.5, dSHEI_dt=0.1,
+            provenance_hash="x5_hel",
+        ))
+        orch.close()
+        # Event may come from consensus — check any FLARE_ONSET with X class
+        assert event is not None
+        assert event.goes_class == "X"
+        assert event.confidence == pytest.approx(1.0)
+
+    def test_solexs_only_never_produces_dual_trigger_onset(self, test_nowcast_config):
+        from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
+        base = datetime(2024, 2, 22, tzinfo=timezone.utc)
+        orch = NowcastOrchestrator(config=test_nowcast_config)
+        dual_trigger_onsets = []
+        for i in range(400):
+            # SoLEXS goes high from frame 200 onward; HEL1OS stays low with no SHEI hardening
+            sol = 500.0 if i < 200 else 50000.0
+            e = orch.process(_make_physics_frame(
+                timestamp=base + timedelta(seconds=i),
+                solexs_flux=sol, hel_flux=100.0,
+                SHEI=-1.8, dSHEI_dt=-0.01,  # no hardening
+                provenance_hash=f"p{i}",
+            ))
+            if e is not None and e.alert_type == "FLARE_ONSET":
+                dual_trigger_onsets.append(e)
+        orch.close()
+        confirmed = [e for e in dual_trigger_onsets if e.detection_method == "DUAL_TRIGGER"]
+        assert not confirmed, f"Got {len(confirmed)} unexpected DUAL_TRIGGER onsets"
+
+    def test_catalog_write_under_100ms(self, synthetic_physics_frames, test_nowcast_config):
+        import time
+        from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
+        orch = NowcastOrchestrator(config=test_nowcast_config)
+        write_times = []
+        for f in synthetic_physics_frames:
+            t0 = time.perf_counter()
+            e = orch.process(f)
+            if e is not None:
+                write_times.append((time.perf_counter() - t0) * 1000)
+        orch.close()
+        if write_times:
+            assert max(write_times) < 100, f"Slowest write: {max(write_times):.1f}ms"
+
+    @pytest.mark.xfail(reason="Requires real PRADAN M+X event catalog", strict=False)
+    def test_tpr_over_0_80_on_real_m_x_validation_set(self):
+        pytest.fail("not implemented — needs real PRADAN data")
+
+    @pytest.mark.xfail(reason="Requires real 100h quiet-Sun PRADAN data", strict=False)
+    def test_far_under_0_05_on_100h_quiet_sun(self):
+        pytest.fail("not implemented — needs real PRADAN data")

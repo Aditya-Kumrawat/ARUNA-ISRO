@@ -133,3 +133,41 @@ class TestRollingP85Baseline:
         assert b.is_frozen()
         b.unfreeze()
         assert not b.is_frozen()
+
+
+class TestChangepointDetector:
+    def test_none_during_warmup(self):
+        from aruna.l3_nowcasting.changepoint import ChangepointDetector
+        d = ChangepointDetector(flux_window=100)
+        result = None
+        for _ in range(99):
+            result = d.update(1.0)
+        assert result is None
+
+    def test_detects_step_change(self):
+        from aruna.l3_nowcasting.changepoint import ChangepointDetector
+        d = ChangepointDetector(flux_window=100, penalty=1.5, min_size=5)
+        result = None
+        for i in range(100):
+            result = d.update(1.0 if i < 50 else 100.0)
+        # step at index 50 — PELT should detect it
+        assert result is not None
+        assert 30 <= result <= 70
+
+    def test_flat_signal_returns_none_or_int(self):
+        from aruna.l3_nowcasting.changepoint import ChangepointDetector
+        d = ChangepointDetector(flux_window=100, penalty=5.0, min_size=10)
+        result = None
+        rng = np.random.default_rng(0)
+        for _ in range(100):
+            result = d.update(float(rng.normal(1.0, 0.001)))
+        assert result is None or isinstance(result, int)
+
+    def test_returns_int_not_list(self):
+        from aruna.l3_nowcasting.changepoint import ChangepointDetector
+        d = ChangepointDetector(flux_window=100, penalty=1.5, min_size=5)
+        result = None
+        for i in range(100):
+            result = d.update(1.0 if i < 50 else 100.0)
+        if result is not None:
+            assert isinstance(result, int)

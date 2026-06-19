@@ -39,10 +39,13 @@ class PhysicsFeatureEmbedder:
             return scaled / norm
         return scaled
 
-    def extract_raw(self, item: Union[List[PhysicsFrame], dict, NowcastEvent], event: Optional[NowcastEvent] = None) -> np.ndarray:
+    def extract_raw(self, item: Union[List[PhysicsFrame], dict, NowcastEvent, np.ndarray], event: Optional[NowcastEvent] = None) -> np.ndarray:
         """
         Extracts the 17 raw features as a numpy array of shape (17,).
         """
+        if isinstance(item, np.ndarray):
+            return item
+
         features = {k: 0.0 for k in self.FEATURES}
 
         # GOES class helper
@@ -50,10 +53,13 @@ class PhysicsFeatureEmbedder:
             mapping = {"B": 1.0, "C": 2.0, "M": 3.0, "X": 4.0}
             return mapping.get(c, 0.0)
 
+        def _signed_log(val: float) -> float:
+            return float(np.sign(val) * np.log10(np.abs(val) + 1.0))
+
         # 1. Dictionary / DB row
         if isinstance(item, dict):
             features["peak_T_MK"] = float(item.get("peak_T_MK") or 0.0)
-            features["peak_EM_cm3"] = float(item.get("peak_EM_cm3") or 0.0)
+            features["peak_EM_cm3"] = _signed_log(float(item.get("peak_EM_cm3") or 0.0))
             features["peak_DNI"] = float(item.get("peak_DNI") or 0.0)
             features["goes_subclass"] = float(item.get("goes_subclass") or 0.0)
             features["confidence"] = float(item.get("confidence") or 0.0)
@@ -116,9 +122,9 @@ class PhysicsFeatureEmbedder:
 
             # compute peak features
             features["peak_T_MK"] = float(max(T_MK)) if T_MK else 0.0
-            features["peak_EM_cm3"] = float(max(EM_cm3)) if EM_cm3 else 0.0
+            features["peak_EM_cm3"] = _signed_log(float(max(EM_cm3)) if EM_cm3 else 0.0)
             features["dT_dt_peak"] = float(max(dT_dt)) if dT_dt else 0.0
-            features["dEM_dt_peak"] = float(max(dEM_dt)) if dEM_dt else 0.0
+            features["dEM_dt_peak"] = _signed_log(float(max(dEM_dt)) if dEM_dt else 0.0)
             features["peak_SHEI"] = float(max(SHEI)) if SHEI else 0.0
             features["peak_dSHEI_dt"] = float(max(dSHEI_dt)) if dSHEI_dt else 0.0
 
@@ -150,11 +156,16 @@ class PhysicsFeatureEmbedder:
 
             # If event is also passed
             if event is not None:
-                features["goes_class_numeric"] = _class_num(event.goes_class)
-                features["goes_subclass"] = float(event.goes_subclass)
-                features["confidence"] = float(event.confidence)
-                if event.lead_time_sec is not None:
-                    features["hope_lead_time_s"] = float(event.lead_time_sec)
+                gcls = getattr(event, "goes_class", getattr(event, "predicted_class", ""))
+                features["goes_class_numeric"] = _class_num(gcls)
+                features["goes_subclass"] = float(getattr(event, "goes_subclass", 1.0))
+                features["confidence"] = float(getattr(event, "confidence", getattr(event, "peak_class_prob", 1.0)))
+                # check lead time options
+                hope_lead_val = getattr(event, "hope_lead_time_sec", getattr(event, "lead_time_sec", getattr(event, "lead_time_estimate_sec", None)))
+                if hope_lead_val is not None:
+                    features["hope_lead_time_s"] = float(hope_lead_val)
+                else:
+                    features["hope_lead_time_s"] = hope_lead
             else:
                 # Fallback to estimate from fluxes
                 max_flux = fluxes[peak_idx] if fluxes else 0.0

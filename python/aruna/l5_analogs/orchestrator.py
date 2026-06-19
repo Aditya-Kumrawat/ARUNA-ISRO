@@ -68,7 +68,7 @@ class AnalogOrchestrator:
             return results
 
         # 1. Extract 17-dimensional query features from physics_frames
-        raw_query = self.index.embedder.extract_raw(physics_frames)
+        raw_query = self.index.embedder.extract_raw(physics_frames, event=forecast_frame)
         
         # 2. Query FAISS index for top K candidates
         candidates = self.index.search(raw_query, top_k=self.top_k_faiss)
@@ -80,7 +80,7 @@ class AnalogOrchestrator:
 
         # 3. Construct 4-D query timeseries from physics_frames
         # Features: ["T_MK", "EM_cm3", "DNI", "SHEI"]
-        query_ts = np.zeros((len(physics_frames), 4), dtype=np.float32)
+        query_ts = np.zeros((len(physics_frames), 4), dtype=np.float64)
         for idx, f in enumerate(physics_frames):
             query_ts[idx, 0] = f.T_MK if f.T_MK is not None else 0.0
             query_ts[idx, 1] = f.EM_cm3 if f.EM_cm3 is not None else 0.0
@@ -103,7 +103,9 @@ class AnalogOrchestrator:
 
         # 5. Check statistical threshold for NO_ANALOG fallback
         nearest_dist = dtw_scores[0][0]
-        threshold = self.index.library_mean_dtw + self.no_analog_sigma * self.index.library_std_dtw
+        if self.index.library_mean_dtw is None or self.index.library_std_dtw is None:
+            self.index.update_dtw_statistics()
+        threshold = self.index.library_mean_dtw + self.no_analog_sigma * max(self.index.library_std_dtw, 0.1)
         
         # If nearest neighbor distance exceeds threshold, trigger NO_ANALOG fallback
         no_analog_triggered = (nearest_dist > threshold) or (nearest_dist == float('inf'))

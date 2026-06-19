@@ -25,6 +25,8 @@ class AnalogIndex:
         self.raw_features: np.ndarray = np.empty((0, 17), dtype=np.float32)
         self.library_timeseries: Dict[str, np.ndarray] = {}
         self.last_count = -1
+        self.library_mean_dtw = 0.0
+        self.library_std_dtw = 1.0
         self.embedder = PhysicsFeatureEmbedder()
         self.load()
 
@@ -57,6 +59,8 @@ class AnalogIndex:
     def register_timeseries(self, event_id: str, ts: np.ndarray) -> None:
         """Registers a timeseries sequence for an event, enabling DTW comparison."""
         self.library_timeseries[event_id] = ts
+        self.library_mean_dtw = None
+        self.library_std_dtw = None
         # Save metadata immediately to ensure persistence
         self._save_metadata()
 
@@ -147,6 +151,8 @@ class AnalogIndex:
         # Save index to disk
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self.index_path)), exist_ok=True)
+            self.library_mean_dtw = None
+            self.library_std_dtw = None
             faiss.write_index(self.index, self.index_path)
             self._save_metadata()
         except Exception as e:
@@ -169,6 +175,8 @@ class AnalogIndex:
                 self.library_timeseries = meta.get("library_timeseries", {})
             self.embedder.scaler = self.scaler
             self.last_count = self.get_db_count()
+            self.library_mean_dtw = None
+            self.library_std_dtw = None
             return True
         except Exception as e:
             logger.error("Failed to load FAISS index or metadata: %s", e)
@@ -207,3 +215,38 @@ class AnalogIndex:
             results.append((eid, gcls, float(dist), raw_v))
 
         return results
+
+    def update_dtw_statistics(self) -> None:
+        """Computes the mean and standard deviation of pairwise DTW distances in the library."""
+        keys = list(self.library_timeseries.keys())
+        if len(keys) < 2:
+            self.library_mean_dtw = 0.0
+            self.library_std_dtw = 1.0
+            return
+
+        distances = []
+        from aruna.l5_analogs.dtw import compute_dtw_distance
+        
+        # Limit calculation to at most 100 random pairs if library is large
+        rng = np.random.default_rng(42)
+        n_pairs = min(100, len(keys) * (len(keys) - 1) // 2)
+        
+        pairs = set()
+        while len(pairs) < n_pairs:
+            i, j = rng.choice(len(keys), size=2, replace=False)
+            pair = tuple(sorted((keys[i], keys[j])))
+            pairs.add(pair)
+            
+        for k1, k2 in pairs:
+            ts1 = self.library_timeseries[k1]
+            ts2 = self.library_timeseries[k2]
+            dist = compute_dtw_distance(ts1, ts2)
+            if dist != float('inf') and not np.isnan(dist):
+                distances.append(dist)
+                
+        if distances:
+            self.library_mean_dtw = float(np.mean(distances))
+            self.library_std_dtw = float(np.std(distances))
+        else:
+            self.library_mean_dtw = 0.0
+            self.library_std_dtw = 1.0

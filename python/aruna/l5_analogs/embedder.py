@@ -1,8 +1,15 @@
 import numpy as np
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Protocol, runtime_checkable
 from datetime import datetime
 from aruna.models.physics import PhysicsFrame
 from aruna.models.nowcast import NowcastEvent
+
+
+@runtime_checkable
+class FlareEmbedder(Protocol):
+    """Swap interface — PhysicsFeatureEmbedder today, ContrastiveFlareEncoder in future."""
+    def encode(self, item, event=None) -> np.ndarray: ...
+
 
 class PhysicsFeatureEmbedder:
     """

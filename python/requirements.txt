@@ -38,6 +38,7 @@ prometheus-client>=0.20
 # ── LLM / agents (optional XL-6) ─────────────────────────────────────────────
 langgraph>=0.1
 langchain-core>=0.2
+langchain-openai>=0.1
 
 # ── Dev / testing ─────────────────────────────────────────────────────────────
 pytest>=7.4

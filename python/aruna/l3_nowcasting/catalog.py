@@ -60,6 +60,7 @@ ON CONFLICT(event_id) DO UPDATE SET
     peak_T_MK          = MAX(master_flare_catalog.peak_T_MK,  excluded.peak_T_MK),
     peak_EM_cm3        = MAX(master_flare_catalog.peak_EM_cm3, excluded.peak_EM_cm3),
     peak_DNI           = MAX(master_flare_catalog.peak_DNI,    excluded.peak_DNI),
+    hope_fired         = MAX(master_flare_catalog.hope_fired, excluded.hope_fired),
     confidence         = excluded.confidence
 """
 

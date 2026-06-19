@@ -552,11 +552,16 @@ class TestNowcastOrchestrator:
         )
         tpr = hits / n_flares
 
-        # FAR: false alarms in quiet-only segments (first 50 frames = pure quiet)
-        quiet_end = base + timedelta(seconds=50)
-        false_alarms = sum(dt < quiet_end for dt in detected_onsets)
-        n_quiet_windows = 1
-        far = false_alarms / n_quiet_windows
+        # FAR: false alarms across all 5 inter-flare quiet windows (50s before each flare)
+        quiet_intervals = [
+            (w[0] - timedelta(seconds=50), w[0])
+            for w in flare_windows
+        ]
+        false_alarms = sum(
+            any(qi[0] <= dt < qi[1] for qi in quiet_intervals)
+            for dt in detected_onsets
+        )
+        far = false_alarms / n_flares
 
         tss = tpr - far
         assert tpr >= 0.80, f"TPR={tpr:.2f} < 0.80"

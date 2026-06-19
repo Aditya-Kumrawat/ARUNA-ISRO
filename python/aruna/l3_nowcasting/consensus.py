@@ -240,6 +240,7 @@ class ConsensusEngine:
             self._declining_count = 0
             self._prev_flux = combined
             self._state = "ONSET"
+            self._hope_time = None
             return self._make_event(
                 "FLARE_ONSET",
                 ts,

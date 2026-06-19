@@ -74,3 +74,62 @@ class TestNowcastConfig:
         cfg = NowcastConfig(baseline_window_sec=3600, trigger_sigma_multiplier=4.0)
         assert cfg.baseline_window_sec == 3600
         assert cfg.trigger_sigma_multiplier == pytest.approx(4.0)
+
+
+class TestRollingP85Baseline:
+    def test_none_before_first_recompute(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline(window_sec=100, recompute_interval=60)
+        val, thr = b.update(1.0, t_sec=0)
+        assert val is None and thr is None
+
+    def test_p85_computed_after_interval(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline(window_sec=200, recompute_interval=60, sigma_multiplier=0.0)
+        for i in range(200):
+            b.update(float(i), t_sec=i)
+        val, thr = b.update(200.0, t_sec=200)
+        assert val is not None
+        # Last recompute was at t=180 on window [0..180], so p85 of [0..180]
+        expected = np.percentile(list(range(181)), 85)
+        assert val == pytest.approx(expected, rel=1e-3)
+        assert thr == pytest.approx(expected, rel=1e-3)  # sigma=0
+
+    def test_threshold_above_baseline(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline(window_sec=200, recompute_interval=1, sigma_multiplier=3.0)
+        rng = np.random.default_rng(0)
+        for i in range(200):
+            b.update(float(rng.normal(10.0, 1.0)), t_sec=i)
+        assert b.threshold > b.baseline
+
+    def test_freeze_holds_baseline_fixed(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline(window_sec=200, recompute_interval=1)
+        for i in range(200):
+            b.update(1.0, t_sec=i)
+        b.freeze()
+        baseline_before = b.baseline
+        for i in range(200, 400):
+            b.update(9999.0, t_sec=i)
+        assert b.baseline == baseline_before
+
+    def test_unfreeze_resumes_updates(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline(window_sec=200, recompute_interval=1)
+        for i in range(200):
+            b.update(1.0, t_sec=i)
+        b.freeze()
+        b.unfreeze()
+        for i in range(200, 400):
+            b.update(9999.0, t_sec=i)
+        assert b.baseline > 100.0
+
+    def test_is_frozen_flag(self):
+        from aruna.l3_nowcasting.baseline import RollingP85Baseline
+        b = RollingP85Baseline()
+        assert not b.is_frozen()
+        b.freeze()
+        assert b.is_frozen()
+        b.unfreeze()
+        assert not b.is_frozen()

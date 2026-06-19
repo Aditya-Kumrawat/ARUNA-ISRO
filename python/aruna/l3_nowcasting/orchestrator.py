@@ -100,7 +100,8 @@ class NowcastOrchestrator:
         )
 
         if event is not None:
-            if event.alert_type == "FLARE_ONSET":
+            # Freeze baselines only on confirmed DUAL_TRIGGER, not SOLEXS_ONLY advisory
+            if event.alert_type == "FLARE_ONSET" and event.detection_method == "DUAL_TRIGGER":
                 self._sol_baseline.freeze()
                 self._hel_baseline.freeze()
             elif event.alert_type == "FLARE_END":

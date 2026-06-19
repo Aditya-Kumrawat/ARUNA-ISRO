@@ -37,6 +37,7 @@ class ConsensusEngine:
         self._declining_count: int = 0
         self._prev_flux: float = 0.0
         self._current_event_id: Optional[str] = None
+        self._sol_only_fired: bool = False
 
     # ── public ──────────────────────────────────────────────────────────────
 
@@ -128,6 +129,20 @@ class ConsensusEngine:
             self._hel_trigger_time = ts
         if self._dual_trigger_met(ts):
             return self._transition_to_onset(frame, flux_sol, flux_hel, ts)
+        # SOLEXS_ONLY degraded mode: emit advisory when sol_triggered but hel_triggered=False
+        if sol_t and not hel_t and not self._sol_only_fired:
+            self._sol_only_fired = True
+            return self._make_event(
+                "FLARE_ONSET",
+                ts,
+                frame,
+                flux_sol,
+                flux_hel,
+                detection_method="SOLEXS_ONLY",
+                confidence=0.5,
+                instruments=["SOLEXS"],
+                flare_type="STANDARD",
+            )
         if hope_flag and self._hope_time is None:
             self._hope_time = ts
             self._state = "HOPE"
@@ -163,6 +178,20 @@ class ConsensusEngine:
             self._hel_trigger_time = ts
         if self._dual_trigger_met(ts):
             return self._transition_to_onset(frame, flux_sol, flux_hel, ts)
+        # SOLEXS_ONLY degraded mode: emit advisory when sol_triggered but hel_triggered=False
+        if sol_t and not hel_t and not self._sol_only_fired:
+            self._sol_only_fired = True
+            return self._make_event(
+                "FLARE_ONSET",
+                ts,
+                frame,
+                flux_sol,
+                flux_hel,
+                detection_method="SOLEXS_ONLY",
+                confidence=0.5,
+                instruments=["SOLEXS"],
+                flare_type="STANDARD",
+            )
         return None
 
     def _handle_onset(
@@ -283,6 +312,7 @@ class ConsensusEngine:
         # Reset trigger times so PEAK state requires fresh dual triggers for overlapping detection
         self._sol_trigger_time = None
         self._hel_trigger_time = None
+        self._sol_only_fired = False
         if self._current_event_id is None:
             self._current_event_id = str(uuid.uuid4())
         lead_time = (
@@ -317,6 +347,7 @@ class ConsensusEngine:
         self._hope_time = None
         self._peak_flux = 0.0
         self._onset_wall_time = None
+        self._sol_only_fired = False
         event = self._make_event(
             "FLARE_END",
             ts,
@@ -348,9 +379,11 @@ class ConsensusEngine:
         event_id: Optional[str] = None,
     ) -> NowcastEvent:
         goes_class, goes_subclass = self._classifier.classify(flux_sol)
+        # SOLEXS_ONLY is always advisory — do not escalate confidence
         if (
             self._classifier.is_major_xclass(goes_class, goes_subclass)
             and self._cfg.x3_auto_critical
+            and detection_method != "SOLEXS_ONLY"
         ):
             confidence = 1.0
         event = NowcastEvent(

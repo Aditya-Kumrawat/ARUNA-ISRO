@@ -612,7 +612,7 @@ class TestNowcastOrchestrator:
         from aruna.l3_nowcasting.orchestrator import NowcastOrchestrator
         base = datetime(2024, 2, 22, tzinfo=timezone.utc)
         orch = NowcastOrchestrator(config=test_nowcast_config)
-        dual_trigger_onsets = []
+        all_events = []
         for i in range(400):
             # SoLEXS goes high from frame 200 onward; HEL1OS stays low with no SHEI hardening
             sol = 500.0 if i < 200 else 50000.0
@@ -622,11 +622,16 @@ class TestNowcastOrchestrator:
                 SHEI=-1.8, dSHEI_dt=-0.01,  # no hardening
                 provenance_hash=f"p{i}",
             ))
-            if e is not None and e.alert_type == "FLARE_ONSET":
-                dual_trigger_onsets.append(e)
+            if e is not None:
+                all_events.append(e)
         orch.close()
-        confirmed = [e for e in dual_trigger_onsets if e.detection_method == "DUAL_TRIGGER"]
+        # Verify no DUAL_TRIGGER FLARE_ONSET when HEL1OS offline
+        confirmed = [e for e in all_events if e.alert_type == "FLARE_ONSET" and e.detection_method == "DUAL_TRIGGER"]
         assert not confirmed, f"Got {len(confirmed)} unexpected DUAL_TRIGGER onsets"
+        # Verify SOLEXS_ONLY advisory IS emitted with confidence <= 0.5
+        solexs_only_events = [e for e in all_events if e.detection_method == "SOLEXS_ONLY"]
+        assert solexs_only_events, "No SOLEXS_ONLY advisory emitted when HEL1OS quiet"
+        assert all(e.confidence <= 0.5 for e in solexs_only_events)
 
     def test_catalog_write_under_100ms(self, synthetic_physics_frames, test_nowcast_config):
         import time

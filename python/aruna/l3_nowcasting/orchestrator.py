@@ -75,7 +75,7 @@ class NowcastOrchestrator:
         _, hel_threshold = self._hel_baseline.update(flux_hel, t_sec)
 
         sol_cp = self._sol_cp.update(flux_sol)
-        hel_cp = self._hel_cp.update(flux_hel)
+        self._hel_cp.update(flux_hel)  # advances internal buffer; SHEI hardening is the HEL trigger proxy
 
         sol_triggered = (
             sol_threshold is not None

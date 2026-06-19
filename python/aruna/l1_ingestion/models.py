@@ -44,6 +44,8 @@ class IngestionConfig:
     chi2_dof_limit: float = 2.0
     kafka_topic_solexs: str = "aruna.observations.solexs"
     kafka_topic_hel1os: str = "aruna.observations.hel1os"
+    kafka_topic_suit:   str = "aruna.observations.suit"
+    kafka_topic_velc:   str = "aruna.observations.velc"
     kafka_topic_quality: str = "aruna.quality.summary"
     kafka_topic_errors: str = "aruna.ingestion.errors"
 

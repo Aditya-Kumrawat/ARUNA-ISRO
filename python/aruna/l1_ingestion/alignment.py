@@ -61,6 +61,38 @@ class TimeAligner:
         self._drift_warn = drift_warn_sec
         self._drift_max = drift_max_sec
 
+    def resample_suit_to_xray(self, suit: FitsData, xray_timestamps: np.ndarray) -> FitsData:
+        """Forward-fill SUIT 60s frames onto the 1s X-ray timestamp grid.
+
+        SUIT integrates for ~60s per frame; its UV value is valid for the entire
+        interval until the next frame. Forward-fill (nearest-previous) is the
+        physically correct interpolation: we don't know future UV brightness.
+
+        If the X-ray window precedes all SUIT frames, UV flux defaults to 0.0.
+        """
+        src_t = suit.timestamps.astype(np.float64)
+        tgt_t = xray_timestamps.astype(np.float64)
+        n_bins = suit.counts_raw.shape[1]
+        new_counts = np.zeros((len(tgt_t), n_bins))
+        for b in range(n_bins):
+            f = interp1d(
+                src_t, suit.counts_raw[:, b],
+                kind='previous',
+                bounds_error=False,
+                fill_value=0.0,   # zero before first SUIT frame
+            )
+            new_counts[:, b] = f(tgt_t)
+        return FitsData(
+            instrument=suit.instrument,
+            timestamps=xray_timestamps,
+            counts_raw=new_counts,
+            energy_bins_kev=suit.energy_bins_kev,
+            livetime=np.ones(len(tgt_t)),
+            deadtime_frac=np.zeros(len(tgt_t)),
+            source_file=suit.source_file,
+            checksum_sha256=suit.checksum_sha256,
+        )
+
     def compute_lag(self, solexs: FitsData, hel1os: FitsData) -> float:
         """Cross-correlate 10-15 keV band. Returns lag in seconds (1 sample = 1s)."""
         s = _band_sum(solexs)

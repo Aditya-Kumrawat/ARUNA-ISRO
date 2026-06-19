@@ -31,6 +31,8 @@ INSTRUMENT_IDS = frozenset({
     "SOLEXS_SDD2",
     "HEL1OS_CDTE",
     "HEL1OS_CZT",
+    "SUIT_FD",      # SUIT full-disk integrated UV photometry (60s cadence)
+    "VELC_DP",      # VELC Doppler-proxy scalar (optional, may be NaN)
 })
 
 
@@ -92,6 +94,12 @@ class ObservationFrame:
 
     def is_hel1os(self) -> bool:
         return self.instrument.startswith("HEL1OS")
+
+    def is_suit(self) -> bool:
+        return self.instrument.startswith("SUIT")
+
+    def is_velc(self) -> bool:
+        return self.instrument.startswith("VELC")
 
     def band_flux(self, low_kev: float, high_kev: float) -> float:
         """Sum counts/s/keV within an energy band [low_kev, high_kev)."""

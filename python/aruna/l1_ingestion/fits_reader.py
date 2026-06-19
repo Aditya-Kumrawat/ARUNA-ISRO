@@ -17,6 +17,16 @@ SOLEXS_DETECTORS = {'SDD1': 'SOLEXS_SDD1', 'SDD2': 'SOLEXS_SDD2'}
 HEL1OS_DETECTORS = {'CDTE': 'HEL1OS_CDTE', 'CZT': 'HEL1OS_CZT'}
 HEL1OS_EBOUNDS   = {'CDTE': 'EBOUNDS_CDTE', 'CZT': 'EBOUNDS_CZT'}
 
+# SUIT uses UV filters — these are not keV; stored as a fake 1-bin "energy" axis
+_SUIT_ENERGY_BINS = np.array([0.0, 0.001])   # placeholder; downstream uses total_flux only
+# VELC Doppler proxy similarly stored as single scalar per timestamp
+_VELC_ENERGY_BINS = np.array([0.0, 0.001])
+
+# Known SUIT FITS column names for integrated UV flux (try in order)
+_SUIT_FLUX_COLS = ('UV_FLUX', 'FLUX', 'COUNTS', 'RATE', 'INTENSITY')
+# Known VELC FITS column names for Doppler velocity proxy
+_VELC_VEL_COLS  = ('DOPPLER_VEL', 'VEL_PROXY', 'FLUX', 'COUNTS')
+
 
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -91,6 +101,89 @@ class FitsReader:
                     checksum_sha256=checksum,
                 ))
         return result
+
+    def read_suit(self, path: Path) -> FitsData:
+        """Read SUIT L1 FITS → FitsData with integrated UV flux per timestamp.
+
+        SUIT captures UV light curves at 60s cadence in multiple filter bands.
+        For ARUNA, we only need the total integrated UV flux across all active
+        filters — stored as a 1-bin scalar FitsData (energy_bins is a fake axis).
+
+        Column name search order: UV_FLUX, FLUX, COUNTS, RATE, INTENSITY.
+        Extension search order: LIGHTCURVE, SPECTRUM, EVENTS, then HDU index 1.
+        """
+        path = Path(path)
+        checksum = _sha256(path)
+        with fits.open(path) as hdul:
+            ext_names = [hdu.name for hdu in hdul]
+            lc_name = next(
+                (n for n in ('LIGHTCURVE', 'SPECTRUM', 'EVENTS') if n in ext_names),
+                None,
+            )
+            hdu = hdul[lc_name] if lc_name else hdul[1]
+            timeref = _parse_timeref(hdu.header)
+            timestamps = _times_to_dt64(hdu.data['TIME'].astype(np.float64), timeref)
+
+            uv_col = next((c for c in _SUIT_FLUX_COLS if c in hdu.data.names), None)
+            if uv_col is None:
+                raise ValueError(
+                    f"SUIT FITS {path.name} has no recognised flux column. "
+                    f"Available: {list(hdu.data.names)}"
+                )
+            uv_flux = hdu.data[uv_col].astype(np.float64)
+            if uv_flux.ndim == 1:
+                uv_flux = uv_flux[:, np.newaxis]   # (N_times,) → (N_times, 1)
+
+        return FitsData(
+            instrument='SUIT_FD',
+            timestamps=timestamps,
+            counts_raw=uv_flux,
+            energy_bins_kev=_SUIT_ENERGY_BINS.copy(),
+            livetime=np.ones(len(timestamps)),
+            deadtime_frac=np.zeros(len(timestamps)),   # UV imager: no count-rate dead-time
+            source_file=path.name,
+            checksum_sha256=checksum,
+        )
+
+    def read_velc(self, path: Path) -> FitsData:
+        """Read VELC L1 FITS → FitsData with Doppler-proxy scalar per timestamp.
+
+        VELC measures plasma evaporation velocity. For XL-2 MPCI, we need a
+        0–1 score derived from the Doppler velocity magnitude. We store the raw
+        proxy value here; score normalisation happens in xl/mpci.py.
+        """
+        path = Path(path)
+        checksum = _sha256(path)
+        with fits.open(path) as hdul:
+            ext_names = [hdu.name for hdu in hdul]
+            lc_name = next(
+                (n for n in ('LIGHTCURVE', 'SPECTRUM', 'DOPPLER') if n in ext_names),
+                None,
+            )
+            hdu = hdul[lc_name] if lc_name else hdul[1]
+            timeref = _parse_timeref(hdu.header)
+            timestamps = _times_to_dt64(hdu.data['TIME'].astype(np.float64), timeref)
+
+            vel_col = next((c for c in _VELC_VEL_COLS if c in hdu.data.names), None)
+            if vel_col is None:
+                raise ValueError(
+                    f"VELC FITS {path.name} has no recognised velocity column. "
+                    f"Available: {list(hdu.data.names)}"
+                )
+            vel_proxy = hdu.data[vel_col].astype(np.float64)
+            if vel_proxy.ndim == 1:
+                vel_proxy = vel_proxy[:, np.newaxis]
+
+        return FitsData(
+            instrument='VELC_DP',
+            timestamps=timestamps,
+            counts_raw=vel_proxy,
+            energy_bins_kev=_VELC_ENERGY_BINS.copy(),
+            livetime=np.ones(len(timestamps)),
+            deadtime_frac=np.zeros(len(timestamps)),
+            source_file=path.name,
+            checksum_sha256=checksum,
+        )
 
     def read_hk(self, path: Path) -> HKData:
         """Read HK FITS → HKData."""

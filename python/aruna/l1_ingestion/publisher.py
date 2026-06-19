@@ -37,17 +37,32 @@ class KafkaPublisher:
         producer,
         topic_solexs: str = "aruna.observations.solexs",
         topic_hel1os: str = "aruna.observations.hel1os",
+        topic_suit:   str = "aruna.observations.suit",
+        topic_velc:   str = "aruna.observations.velc",
         topic_quality: str = "aruna.quality.summary",
     ):
         self._producer = producer
         self._t_solexs  = topic_solexs
         self._t_hel1os  = topic_hel1os
+        self._t_suit    = topic_suit
+        self._t_velc    = topic_velc
         self._t_quality = topic_quality
+
+    def _topic_for(self, frame: ObservationFrame) -> str:
+        if frame.is_solexs():
+            return self._t_solexs
+        if frame.is_hel1os():
+            return self._t_hel1os
+        if frame.is_suit():
+            return self._t_suit
+        if frame.is_velc():
+            return self._t_velc
+        return self._t_solexs  # fallback — should not happen
 
     def publish(self, frames: List[ObservationFrame]) -> None:
         counts = {'total': 0, 'good': 0, 'flagged': 0}
         for frame in frames:
-            topic = self._t_solexs if frame.is_solexs() else self._t_hel1os
+            topic = self._topic_for(frame)
             payload = _to_json(frame)
             try:
                 self._producer.send(topic, value=payload, key=frame.instrument.encode())

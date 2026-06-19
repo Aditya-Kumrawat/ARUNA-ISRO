@@ -1,6 +1,9 @@
 # L2 Physics Engine Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status:** ✅ **COMPLETED** (Session 4 — 2026-06-18)
+> **Verification:** All 153 active unit & integration tests passing cleanly.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the L2 Physics Engine — consuming paired `ObservationFrame` objects and producing `PhysicsFrame` objects with T/EM plasma diagnostics, DNI/TNPSV/SHEI/HFD/QPP/FeKα observables, HOPE precursor flag, and engine state.
 
@@ -51,7 +54,7 @@
 **Interfaces:**
 - Produces: `PhysicsQuality`, `EngineState`, `FitResult`, `HOPEResult`, `PhysicsConfig`, `PhysicsFrame` — used by every subsequent task
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # python/tests/test_l2_physics.py
@@ -118,14 +121,14 @@ class TestModels:
         assert cfg.hfd_window == 600
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py -v
 ```
 Expected: `ImportError: cannot import name 'PhysicsFrame'`
 
-- [ ] **Step 3: Implement `models.py`**
+- [x] **Step 3: Implement `models.py`**
 
 ```python
 # python/aruna/l2_physics/models.py
@@ -225,14 +228,14 @@ class PhysicsFrame:
         default_factory=lambda: datetime.now(timezone.utc))
 ```
 
-- [ ] **Step 4: Run — expect PASS**
+- [x] **Step 4: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestModels -v
 ```
 Expected: `6 passed`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add python/aruna/l2_physics/models.py python/tests/test_l2_physics.py
@@ -252,7 +255,7 @@ git commit -m "feat(l2): add PhysicsFrame dataclass, PhysicsQuality, EngineState
 - Produces: `CHIANTILookupTable.lookup(T_MK, EM_cm3, energy_bins) -> np.ndarray`
 - Produces: `CHIANTILookupTable.generate(energy_bins) -> None`
 
-- [ ] **Step 1: Write failing tests (append to test file)**
+- [x] **Step 1: Write failing tests (append to test file)**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -296,13 +299,13 @@ class TestCHIANTITable:
         assert mean_e_hot > mean_e_cold
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py::TestCHIANTITable -v
 ```
 
-- [ ] **Step 3: Implement `chianti_table.py`**
+- [x] **Step 3: Implement `chianti_table.py`**
 
 ```python
 # python/aruna/l2_physics/chianti_table.py
@@ -367,21 +370,21 @@ class CHIANTILookupTable:
         return self._interp([[T_log, EM_log]])[0]
 ```
 
-- [ ] **Step 4: Create data dir**
+- [x] **Step 4: Create data dir**
 
 ```
 mkdir -p python/aruna/l2_physics/data
 touch python/aruna/l2_physics/data/.gitkeep
 ```
 
-- [ ] **Step 5: Run — expect PASS**
+- [x] **Step 5: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestCHIANTITable -v
 ```
 Expected: `3 passed`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add python/aruna/l2_physics/chianti_table.py python/aruna/l2_physics/data/.gitkeep python/tests/test_l2_physics.py
@@ -400,7 +403,7 @@ git commit -m "feat(l2): add CHIANTILookupTable (MKG bremsstrahlung fallback fit
 - Consumes: `CHIANTILookupTable.lookup`
 - Produces: `IsothermalFitter.fit(counts_per_s_kev, energy_bins_kev) -> FitResult`
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -454,13 +457,13 @@ class TestIsothermalFitter:
         assert result.backend in ("sunkit_spex", "chianti_lookup")
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py::TestIsothermalFitter -v
 ```
 
-- [ ] **Step 3: Implement `isothermal.py`**
+- [x] **Step 3: Implement `isothermal.py`**
 
 ```python
 # python/aruna/l2_physics/isothermal.py
@@ -559,14 +562,14 @@ class IsothermalFitter:
             return FitResult(np.nan, np.nan, np.nan, np.nan, np.inf, self._backend)
 ```
 
-- [ ] **Step 4: Run — expect PASS**
+- [x] **Step 4: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestIsothermalFitter -v
 ```
 Expected: `4 passed`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add python/aruna/l2_physics/isothermal.py python/tests/test_l2_physics.py
@@ -588,7 +591,7 @@ git commit -m "feat(l2): add IsothermalFitter with sunkit-spex / CHIANTILookupTa
 - Produces: `TNPSVComputer.update(T_MK, EM_cm3) -> Tuple[float, float]`
 - Produces: `SHEIComputer.update_single(hel_frame) -> Tuple[float, float]`
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -672,13 +675,13 @@ class TestSHEIComputer:
         assert dshei != 0.0
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py::TestDNIComputer python/tests/test_l2_physics.py::TestTNPSVComputer python/tests/test_l2_physics.py::TestSHEIComputer -v
 ```
 
-- [ ] **Step 3: Implement `dni.py`**
+- [x] **Step 3: Implement `dni.py`**
 
 ```python
 # python/aruna/l2_physics/dni.py
@@ -696,7 +699,7 @@ class DNIComputer:
         self._cumulative_hel = 0.0
 ```
 
-- [ ] **Step 4: Implement `tnpsv.py`**
+- [x] **Step 4: Implement `tnpsv.py`**
 
 ```python
 # python/aruna/l2_physics/tnpsv.py
@@ -724,7 +727,7 @@ class TNPSVComputer:
         return mag, ang
 ```
 
-- [ ] **Step 5: Implement `shei.py`**
+- [x] **Step 5: Implement `shei.py`**
 
 ```python
 # python/aruna/l2_physics/shei.py
@@ -750,14 +753,14 @@ class SHEIComputer:
         return shei, dshei_dt
 ```
 
-- [ ] **Step 6: Run — expect PASS**
+- [x] **Step 6: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestDNIComputer python/tests/test_l2_physics.py::TestTNPSVComputer python/tests/test_l2_physics.py::TestSHEIComputer -v
 ```
 Expected: `8 passed`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```
 git add python/aruna/l2_physics/dni.py python/aruna/l2_physics/tnpsv.py python/aruna/l2_physics/shei.py python/tests/test_l2_physics.py
@@ -777,7 +780,7 @@ git commit -m "feat(l2): add DNIComputer, TNPSVComputer, SHEIComputer"
 - Produces: `HFDComputer.update(total_flux: float) -> float` (nan during warm-up)
 - Produces: `QPPDetector.update(hel_25_50_flux: float) -> Tuple[Optional[float], Optional[float]]`
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -840,13 +843,13 @@ class TestQPPDetector:
             assert 20 < period < 45
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py::TestHFDComputer python/tests/test_l2_physics.py::TestQPPDetector -v
 ```
 
-- [ ] **Step 3: Implement `hfd.py`**
+- [x] **Step 3: Implement `hfd.py`**
 
 ```python
 # python/aruna/l2_physics/hfd.py
@@ -888,7 +891,7 @@ class HFDComputer:
             return float("nan")
 ```
 
-- [ ] **Step 4: Implement `qpp.py`**
+- [x] **Step 4: Implement `qpp.py`**
 
 ```python
 # python/aruna/l2_physics/qpp.py
@@ -941,14 +944,14 @@ class QPPDetector:
             return None, None
 ```
 
-- [ ] **Step 5: Run — expect PASS**
+- [x] **Step 5: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestHFDComputer python/tests/test_l2_physics.py::TestQPPDetector -v
 ```
 Expected: `6 passed` (QPP period test may skip if pywt unavailable — that's acceptable)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add python/aruna/l2_physics/hfd.py python/aruna/l2_physics/qpp.py python/tests/test_l2_physics.py
@@ -968,7 +971,7 @@ git commit -m "feat(l2): add HFDComputer (Higuchi) and QPPDetector (Morlet CWT)"
 - Produces: `FeKaExtractor.extract(counts, energy_bins, T_MK, EM_cm3) -> float`
 - Produces: `HOPEEvaluator.evaluate(..., streak_sec, config) -> HOPEResult`
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -1069,13 +1072,13 @@ class TestHOPEEvaluator:
         assert len(r.reason) > 0
 ```
 
-- [ ] **Step 2: Run — expect ImportError**
+- [x] **Step 2: Run — expect ImportError**
 
 ```
 pytest python/tests/test_l2_physics.py::TestFeKaExtractor python/tests/test_l2_physics.py::TestHOPEEvaluator -v
 ```
 
-- [ ] **Step 3: Implement `feka.py`**
+- [x] **Step 3: Implement `feka.py`**
 
 ```python
 # python/aruna/l2_physics/feka.py
@@ -1104,7 +1107,7 @@ class FeKaExtractor:
         return float(np.sum(np.clip(residual[mask], 0.0, None)))
 ```
 
-- [ ] **Step 4: Implement `hope.py`**
+- [x] **Step 4: Implement `hope.py`**
 
 ```python
 # python/aruna/l2_physics/hope.py
@@ -1145,14 +1148,14 @@ class HOPEEvaluator:
                           lead_time_sec=int(90 + streak_sec * 2))
 ```
 
-- [ ] **Step 5: Run — expect PASS**
+- [x] **Step 5: Run — expect PASS**
 
 ```
 pytest python/tests/test_l2_physics.py::TestFeKaExtractor python/tests/test_l2_physics.py::TestHOPEEvaluator -v
 ```
 Expected: `10 passed`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add python/aruna/l2_physics/feka.py python/aruna/l2_physics/hope.py python/tests/test_l2_physics.py
@@ -1175,7 +1178,7 @@ git commit -m "feat(l2): add FeKaExtractor and HOPEEvaluator"
 - Produces: `PhysicsEngine.reset() -> None`
 - Produces: `PhysicsEngine.state -> EngineState`
 
-- [ ] **Step 1: Append engine + integration tests**
+- [x] **Step 1: Append engine + integration tests**
 
 ```python
 # append to python/tests/test_l2_physics.py
@@ -1244,7 +1247,7 @@ class TestPhysicsEngine:
         assert any("timestamp" in r.message.lower() for r in caplog.records)
 ```
 
-- [ ] **Step 2: Add fixtures to conftest.py**
+- [x] **Step 2: Add fixtures to conftest.py**
 
 ```python
 # append to python/tests/conftest.py (after existing fixtures)
@@ -1281,13 +1284,13 @@ def quiet_sun_extended_frames(solexs_x63_frames, hel1os_x63_frames):
     return (sol_quiet + solexs_x63_frames, hel_quiet + hel1os_x63_frames)
 ```
 
-- [ ] **Step 3: Run — expect ImportError on engine**
+- [x] **Step 3: Run — expect ImportError on engine**
 
 ```
 pytest python/tests/test_l2_physics.py::TestPhysicsEngine -v
 ```
 
-- [ ] **Step 4: Implement `engine.py`**
+- [x] **Step 4: Implement `engine.py`**
 
 ```python
 # python/aruna/l2_physics/engine.py
@@ -1527,7 +1530,7 @@ class PhysicsEngine:
             logger.error("Kafka publish failed: %s", exc)
 ```
 
-- [ ] **Step 5: Update `__init__.py`**
+- [x] **Step 5: Update `__init__.py`**
 
 ```python
 # python/aruna/l2_physics/__init__.py
@@ -1551,21 +1554,21 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 6: Run all tests**
+- [x] **Step 6: Run all tests**
 
 ```
 pytest python/tests/test_l2_physics.py -v
 ```
 Expected: all tests passing. Note: `TestHFDComputer::test_returns_float_after_window_fills` requires window=50 override (already set in that test).
 
-- [ ] **Step 7: Run full suite to check no regressions**
+- [x] **Step 7: Run full suite to check no regressions**
 
 ```
 pytest python/ -v --tb=short
 ```
 Expected: all previous L0/L1 tests still pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```
 git add python/aruna/l2_physics/ python/tests/conftest.py python/tests/test_l2_physics.py

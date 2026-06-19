@@ -91,6 +91,19 @@ class PhysicsFrame:
     physics_quality_flag: PhysicsQuality
     fit_backend:          str
     pipeline_version:     str
+    dT_dt:                float    = 0.0
+    dEM_dt:               float    = 0.0
+    d2T_dt2:              float    = 0.0
+    solexs_3_6kev:        float    = 0.0
+    solexs_6_10kev:       float    = 0.0
+    hel1os_10_25kev:      float    = 0.0
+    hel1os_25_50kev:      float    = 0.0
+    hel1os_50_70kev:      float    = 0.0
+    suit_uv_flux:         float    = 0.0   # integrated UV brightness [counts/s]; 0 if SUIT absent
+    suit_uv_brightening_rate: float = 0.0  # dUV/dt [counts/s per second]
+    tnci:                 float    = 0.0   # Thermal-Nonthermal Coupling Index (PRD §13.4)
+    provenance_hash:      str      = ""
+    quality_flag:         QualityFlag = QualityFlag.GOOD
     schema_version:       str      = "1.0"
     created_at:           datetime = field(
         default_factory=lambda: datetime.now(timezone.utc))

@@ -86,6 +86,8 @@ class IngestionPipeline:
             kafka_producer,
             self._cfg.kafka_topic_solexs,
             self._cfg.kafka_topic_hel1os,
+            self._cfg.kafka_topic_suit,
+            self._cfg.kafka_topic_velc,
             self._cfg.kafka_topic_quality,
         ) if kafka_producer else None
 
@@ -95,9 +97,14 @@ class IngestionPipeline:
         hel1os_path: Path,
         hk_path: Path,
         hek_results=None,
+        suit_path: Optional[Path] = None,
+        velc_path: Optional[Path] = None,
     ) -> List[ObservationFrame]:
         """
         Full L1 ingestion pipeline: FITS → corrected → aligned → labelled → validated → published.
+
+        suit_path, velc_path are optional. When absent the pipeline runs in the
+        original 2-instrument mode; no SUIT/VELC frames are emitted.
         """
         hk = self._reader.read_hk(hk_path)
 
@@ -118,22 +125,47 @@ class IngestionPipeline:
         saa_flags_cdte = np.array([_nearest_hk(hk, ts)[0] for ts in cdte.timestamps])
         bg_cdte, bg_flags_cdte, _ = self._bg.subtract(corr_cdte, [], saa_flags_cdte)
 
-        # ── Time alignment ───────────────────────────────────────────────────
+        # ── SoLEXS / HEL1OS time alignment ──────────────────────────────────
         solexs_aligned, hel1os_aligned, _ = self._aligner.align(solexs_data, bg_cdte)
         n_sol = len(solexs_aligned.timestamps)
         n_hel = len(hel1os_aligned.timestamps)
         solexs_flags_trim = solexs_flags[:n_sol]
-        # After cubic interpolation hel1os_aligned may have more frames than bg_flags_cdte
         if n_hel <= len(bg_flags_cdte):
             hel1os_flags_trim = bg_flags_cdte[:n_hel]
         else:
             hel1os_flags_trim = np.full(n_hel, int(QualityFlag.GOOD), dtype=np.int8)
             hel1os_flags_trim[:len(bg_flags_cdte)] = bg_flags_cdte
 
-        # ── Build ObservationFrames ──────────────────────────────────────────
+        # ── Build X-ray ObservationFrames ────────────────────────────────────
         all_frames: List[ObservationFrame] = []
         all_frames.extend(_fits_to_frames(solexs_aligned, hk, solexs_flags_trim))
         all_frames.extend(_fits_to_frames(hel1os_aligned, hk, hel1os_flags_trim))
+
+        # ── SUIT: resample 60s cadence → 1s X-ray grid ─────────────────────
+        if suit_path is not None:
+            suit_path = Path(suit_path)
+            try:
+                suit_raw = self._reader.read_suit(suit_path)
+                suit_resampled = self._aligner.resample_suit_to_xray(
+                    suit_raw, solexs_aligned.timestamps
+                )
+                suit_flags = np.full(n_sol, int(QualityFlag.GOOD), dtype=np.int8)
+                all_frames.extend(_fits_to_frames(suit_resampled, hk, suit_flags))
+            except Exception as exc:
+                logger.warning("SUIT ingestion failed (%s) — continuing without SUIT", exc)
+
+        # ── VELC: resample to 1s X-ray grid (optional) ─────────────────────
+        if velc_path is not None:
+            velc_path = Path(velc_path)
+            try:
+                velc_raw = self._reader.read_velc(velc_path)
+                velc_resampled = self._aligner.resample_suit_to_xray(
+                    velc_raw, solexs_aligned.timestamps   # same logic as SUIT resampling
+                )
+                velc_flags = np.full(n_sol, int(QualityFlag.GOOD), dtype=np.int8)
+                all_frames.extend(_fits_to_frames(velc_resampled, hk, velc_flags))
+            except Exception as exc:
+                logger.warning("VELC ingestion failed (%s) — continuing without VELC", exc)
 
         # ── GOES label join ──────────────────────────────────────────────────
         all_frames = self._joiner.join(all_frames, hek_results)

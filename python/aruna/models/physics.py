@@ -70,6 +70,11 @@ class PhysicsFrame:
     # ── Quality ──────────────────────────────────────────────────────────────
     quality_flag: QualityFlag
 
+    # ── Multi-payload (SUIT UV, XL-2 MPCI inputs) — 0.0 if SUIT not available ─
+    suit_uv_flux: float = 0.0               # integrated UV brightness [counts/s]
+    suit_uv_brightening_rate: float = 0.0   # dUV/dt [counts/s per second]
+    tnci: float = 0.0                       # Thermal-Nonthermal Coupling Index (PRD §13.4)
+
     # ── Auto-generated ───────────────────────────────────────────────────────
     frame_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     provenance_hash: str = ""          # SHA-256 of input frame checksums

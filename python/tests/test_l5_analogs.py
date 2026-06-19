@@ -1,34 +1,520 @@
 """L5 — Historical Analog Retrieval Tests. PRD §9.3 + brainstorm."""
 import pytest
+import os
+import sqlite3
+import time
+import numpy as np
+from datetime import datetime, timezone
+
+from aruna.models.forecast import ForecastFrame
+from aruna.models.physics import PhysicsFrame
+from aruna.models.observation import QualityFlag
+from aruna.l5_analogs.models import AnalogMatch, NO_ANALOG
+from aruna.l5_analogs.orchestrator import AnalogOrchestrator
+
+def populate_test_catalog(db_path: str, num_events: int = 10, pattern: str = "random"):
+    """Helper to populate the master_flare_catalog SQLite database with dummy events."""
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS master_flare_catalog (
+        event_id           TEXT PRIMARY KEY,
+        start_time         TEXT,
+        hope_time          TEXT,
+        onset_time         TEXT,
+        peak_time          TEXT,
+        end_time           TEXT,
+        goes_class         TEXT NOT NULL,
+        goes_subclass      REAL,
+        peak_flux_solexs   REAL DEFAULT 0,
+        peak_flux_hel1os   REAL DEFAULT 0,
+        peak_T_MK          REAL DEFAULT 0,
+        peak_EM_cm3        REAL DEFAULT 0,
+        peak_DNI           REAL DEFAULT 0,
+        hope_lead_time_sec INTEGER,
+        hope_fired         INTEGER DEFAULT 0,
+        instruments        TEXT,
+        detection_method   TEXT,
+        confidence         REAL,
+        flare_type         TEXT,
+        pipeline_version   TEXT,
+        provenance_hash    TEXT,
+        notes              TEXT
+    );
+    """)
+    conn.commit()
+
+    rows = []
+    rng = np.random.default_rng(42)
+    for i in range(num_events):
+        event_id = f"EVENT_{i:05d}"
+        if pattern == "quiet":
+            goes_class = "B"
+            goes_subclass = round(rng.uniform(1.0, 3.0), 1)
+            peak_T = rng.uniform(3.0, 5.0)
+            peak_EM = rng.uniform(1e45, 5e45)
+            peak_DNI = rng.uniform(0.01, 0.05)
+        elif pattern == "mixed":
+            goes_class = rng.choice(["B", "C", "M", "X"])
+            goes_subclass = round(rng.uniform(1.0, 9.9), 1)
+            peak_T = rng.uniform(5.0, 25.0)
+            peak_EM = rng.uniform(1e46, 5e48)
+            peak_DNI = rng.uniform(0.1, 4.0)
+        else:
+            goes_class = rng.choice(["B", "C", "M", "X"])
+            goes_subclass = round(rng.uniform(1.0, 9.9), 1)
+            peak_T = rng.uniform(5.0, 30.0)
+            peak_EM = rng.uniform(1e46, 1e49)
+            peak_DNI = rng.uniform(0.1, 5.0)
+
+        rows.append((
+            event_id, "2024-02-22T00:00:00", None, None, None, None,
+            goes_class, goes_subclass, 100.0, 50.0,
+            peak_T, peak_EM, peak_DNI, 120, 1, "SOLEXS,HEL1OS",
+            "PEAK", 0.9, "STANDARD", "2.0.0", f"hash_{i}"
+        ))
+
+    cur.executemany("""
+    INSERT OR REPLACE INTO master_flare_catalog (
+        event_id, start_time, hope_time, onset_time, peak_time, end_time,
+        goes_class, goes_subclass, peak_flux_solexs, peak_flux_hel1os,
+        peak_T_MK, peak_EM_cm3, peak_DNI,
+        hope_lead_time_sec, hope_fired, instruments,
+        detection_method, confidence, flare_type, pipeline_version, provenance_hash
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, rows)
+    conn.commit()
+    conn.close()
+
+def make_test_physics_frames(length: int = 100, amp: float = 1.0, phase_shift: float = 0.0) -> list[PhysicsFrame]:
+    """Helper to generate a sequence of PhysicsFrame objects."""
+    base_ts = datetime(2024, 2, 22, 0, 0, 0, tzinfo=timezone.utc)
+    frames = []
+    for i in range(length):
+        t = i / float(length)
+        T_val = float(5.0 + amp * 15.0 * np.sin(np.pi * t + phase_shift))
+        EM_val = float(1e46 + amp * 5e48 * np.sin(np.pi * t + phase_shift))
+        DNI_val = float(0.1 + amp * 3.0 * np.sin(np.pi * t + phase_shift))
+        SHEI_val = float(-1.8 + amp * 1.2 * np.sin(np.pi * t + phase_shift))
+        
+        frames.append(PhysicsFrame(
+            timestamp=base_ts + datetime.timedelta(seconds=i) if hasattr(datetime, "timedelta") else base_ts + i * datetime.resolution,  # wait, datetime.timedelta is from datetime
+            # Actually, let's use timedelta imported from datetime:
+            # Let's import timedelta
+            T_MK=T_val,
+            T_uncertainty_MK=0.5,
+            EM_cm3=EM_val,
+            EM_uncertainty=1e45,
+            fit_chi_squared=1.1,
+            DNI=DNI_val,
+            tnpsv_magnitude=0.05,
+            tnpsv_angle_rad=0.3,
+            SHEI=SHEI_val,
+            dSHEI_dt=0.0,
+            HFD=float("nan"),
+            FeKa_flux=0.0,
+            QPP_period_sec=None,
+            QPP_amplitude=None,
+            dT_dt=0.0,
+            dEM_dt=0.0,
+            d2T_dt2=0.0,
+            solexs_3_6kev=300.0,
+            solexs_6_10kev=200.0,
+            hel1os_10_25kev=50.0,
+            hel1os_25_50kev=30.0,
+            hel1os_50_70kev=20.0,
+            flare_phase="HOPE",
+            hope_flag=True,
+            hope_lead_time_sec=120,
+            hope_reason="dT/dt>0",
+            quality_flag=QualityFlag.GOOD,
+        ))
+    return frames
+
+# Ensure timedelta is available
+from datetime import timedelta
+# Let's override the make_test_physics_frames with correct timedelta usage
+def make_test_physics_frames(length: int = 100, amp: float = 1.0, phase_shift: float = 0.0) -> list[PhysicsFrame]:
+    base_ts = datetime(2024, 2, 22, 0, 0, 0, tzinfo=timezone.utc)
+    frames = []
+    for i in range(length):
+        t = i / float(length)
+        T_val = float(5.0 + amp * 15.0 * np.sin(np.pi * t + phase_shift))
+        EM_val = float(1e46 + amp * 5e48 * np.sin(np.pi * t + phase_shift))
+        DNI_val = float(0.1 + amp * 3.0 * np.sin(np.pi * t + phase_shift))
+        SHEI_val = float(-1.8 + amp * 1.2 * np.sin(np.pi * t + phase_shift))
+        
+        frames.append(PhysicsFrame(
+            timestamp=base_ts + timedelta(seconds=i),
+            T_MK=T_val,
+            T_uncertainty_MK=0.5,
+            EM_cm3=EM_val,
+            EM_uncertainty=1e45,
+            fit_chi_squared=1.1,
+            DNI=DNI_val,
+            tnpsv_magnitude=0.05,
+            tnpsv_angle_rad=0.3,
+            SHEI=SHEI_val,
+            dSHEI_dt=0.0,
+            HFD=float("nan"),
+            FeKa_flux=0.0,
+            QPP_period_sec=None,
+            QPP_amplitude=None,
+            dT_dt=0.0,
+            dEM_dt=0.0,
+            d2T_dt2=0.0,
+            solexs_3_6kev=300.0,
+            solexs_6_10kev=200.0,
+            hel1os_10_25kev=50.0,
+            hel1os_25_50kev=30.0,
+            hel1os_50_70kev=20.0,
+            flare_phase="HOPE",
+            hope_flag=True,
+            hope_lead_time_sec=120,
+            hope_reason="dT/dt>0",
+            quality_flag=QualityFlag.GOOD,
+        ))
+    return frames
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
-def test_retrieval_precision_over_0_75():
-    pytest.fail("not implemented")
+def test_retrieval_precision_over_0_75(tmp_path):
+    """Verify that retrieval precision of matching events is high (overall correctness >= 75%)."""
+    db_file = str(tmp_path / "test_precision.db")
+    index_file = str(tmp_path / "faiss_precision.index")
+    
+    # 1. Populate catalog with mixed flare events
+    num_events = 20
+    populate_test_catalog(db_file, num_events=num_events, pattern="mixed")
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    # 2. Register distinct timeseries for each event
+    # Using different frequency / amplitude for timeseries to ensure distinct signatures
+    event_timeseries = {}
+    for i in range(num_events):
+        eid = f"EVENT_{i:05d}"
+        # Column 0: T_MK, Column 1: EM_cm3, Column 2: DNI, Column 3: SHEI
+        ts = np.zeros((100, 4))
+        t = np.linspace(0, np.pi, 100)
+        ts[:, 0] = 5.0 + (i + 1) * 1.5 * np.sin(t)
+        ts[:, 1] = 1e46 + (i + 1) * 1e47 * np.sin(t)
+        ts[:, 2] = 0.1 + (i + 1) * 0.2 * np.sin(t)
+        ts[:, 3] = -1.8 + (i + 1) * 0.1 * np.sin(t)
+        
+        orchestrator.register_timeseries(eid, ts)
+        event_timeseries[eid] = ts
+        
+    orchestrator.index.rebuild()
+    
+    # 3. Query using a slightly noisy version of 10 selected events
+    correct_matches = 0
+    query_count = 10
+    
+    for i in range(query_count):
+        target_eid = f"EVENT_{i:05d}"
+        # Retrieve target timeseries and add minor noise
+        target_ts = event_timeseries[target_eid]
+        noisy_ts = target_ts + np.random.normal(0, 0.01, target_ts.shape)
+        
+        # Build mock PhysicsFrames from noisy_ts
+        query_frames = []
+        for idx in range(100):
+            query_frames.append(PhysicsFrame(
+                timestamp=datetime.utcnow(),
+                T_MK=noisy_ts[idx, 0],
+                EM_cm3=noisy_ts[idx, 1],
+                DNI=noisy_ts[idx, 2],
+                SHEI=noisy_ts[idx, 3],
+                quality_flag=QualityFlag.GOOD
+            ))
+            
+        mock_forecast = ForecastFrame(
+            timestamp=datetime.utcnow(),
+            horizon_minutes=5,
+            prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+            predicted_class="C", peak_class_prob=0.8,
+            confidence_interval_low=0.7, confidence_interval_high=0.9,
+            prediction_set=["C"], calibration_ece=0.02,
+            lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+            tcn_weight=0.5, moirai_weight=0.5,
+            hope_flag_active=True, physics_state="HOPE",
+            input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+            model_version="1", schema_version="1", pipeline_version="1"
+        )
+        
+        matches = orchestrator.process(mock_forecast, query_frames)
+        
+        if matches and matches[0].event_id == target_eid:
+            correct_matches += 1
+            
+    precision = correct_matches / query_count
+    assert precision >= 0.75
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
-def test_faiss_search_under_100ms_for_10k_events():
-    pytest.fail("not implemented")
+def test_faiss_search_under_100ms_for_10k_events(tmp_path):
+    """Performance test: verify FAISS search executes in < 100ms on a 10,000-event catalog."""
+    db_file = str(tmp_path / "test_perf.db")
+    index_file = str(tmp_path / "faiss_perf.index")
+    
+    # Bulk populate 10,000 events
+    populate_test_catalog(db_file, num_events=10000, pattern="mixed")
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    # We populate some sample timeseries for a subset or all.
+    # To keep test set up fast, we can populate timeseries for a subset or just register them
+    # for all since FAISS search only checks raw query feature space.
+    # For FAISS search itself: it runs on the 17-dimensional features.
+    orchestrator.index.rebuild()
+    
+    # Measure execution time of a single search
+    query_frames = make_test_physics_frames(length=100)
+    mock_forecast = ForecastFrame(
+        timestamp=datetime.utcnow(),
+        horizon_minutes=5,
+        prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+        predicted_class="C", peak_class_prob=0.8,
+        confidence_interval_low=0.7, confidence_interval_high=0.9,
+        prediction_set=["C"], calibration_ece=0.02,
+        lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+        tcn_weight=0.5, moirai_weight=0.5,
+        hope_flag_active=True, physics_state="HOPE",
+        input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+        model_version="1", schema_version="1", pipeline_version="1"
+    )
+    
+    # Warm up
+    orchestrator.process(mock_forecast, query_frames)
+    
+    # Measure
+    t0 = time.perf_counter()
+    matches = orchestrator.process(mock_forecast, query_frames)
+    t1 = time.perf_counter()
+    elapsed_ms = (t1 - t0) * 1000.0
+    
+    print(f"FAISS search with 10k database took {elapsed_ms:.2f} ms")
+    assert elapsed_ms < 100.0
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
-def test_no_analog_fires_when_dtw_over_3_sigma():
-    pytest.fail("not implemented")
+def test_no_analog_fires_when_dtw_over_3_sigma(tmp_path):
+    """Verify that NO_ANALOG fallback triggers if DTW distance exceeds mean + 3 * std."""
+    db_file = str(tmp_path / "test_fallback.db")
+    index_file = str(tmp_path / "faiss_fallback.index")
+    
+    # Populate catalog with 10 quiet events
+    populate_test_catalog(db_file, num_events=10, pattern="quiet")
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    # Register very quiet timeseries (almost flat lines)
+    for i in range(10):
+        eid = f"EVENT_{i:05d}"
+        ts = np.zeros((100, 4))
+        ts[:, 0] = 3.0 + np.random.normal(0, 0.01, 100)
+        ts[:, 1] = 1e45 + np.random.normal(0, 1e43, 100)
+        ts[:, 2] = 0.01 + np.random.normal(0, 0.001, 100)
+        ts[:, 3] = -1.8 + np.random.normal(0, 0.01, 100)
+        orchestrator.register_timeseries(eid, ts)
+        
+    orchestrator.index.rebuild()
+    
+    # Now query with a massive X-class flare (high temperature, high DNI, etc.)
+    # The DTW distance will be extremely large compared to the quiet ones
+    query_frames = make_test_physics_frames(length=100, amp=10.0, phase_shift=0.5)
+    
+    mock_forecast = ForecastFrame(
+        timestamp=datetime.utcnow(),
+        horizon_minutes=5,
+        prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+        predicted_class="C", peak_class_prob=0.8,
+        confidence_interval_low=0.7, confidence_interval_high=0.9,
+        prediction_set=["C"], calibration_ece=0.02,
+        lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+        tcn_weight=0.5, moirai_weight=0.5,
+        hope_flag_active=True, physics_state="HOPE",
+        input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+        model_version="1", schema_version="1", pipeline_version="1"
+    )
+    
+    matches = orchestrator.process(mock_forecast, query_frames)
+    
+    assert len(matches) == 1
+    assert matches[0] == NO_ANALOG
+    assert matches[0].no_analog_flag is True
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
 @pytest.mark.physics
-def test_x63_retrieves_at_least_one_x_class_analog():
-    pytest.fail("not implemented")
+def test_x63_retrieves_at_least_one_x_class_analog(tmp_path):
+    """Verify that querying with an X-class event retrieves at least one historical X-class analog."""
+    db_file = str(tmp_path / "test_xclass.db")
+    index_file = str(tmp_path / "faiss_xclass.index")
+    
+    # Populate catalog with 1 X-class event and 5 quiet events
+    populate_test_catalog(db_file, num_events=5, pattern="quiet")
+    
+    # Append the X-class event manually
+    conn = sqlite3.connect(db_file)
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO master_flare_catalog (
+        event_id, start_time, goes_class, goes_subclass, peak_flux_solexs, peak_flux_hel1os,
+        peak_T_MK, peak_EM_cm3, peak_DNI, hope_lead_time_sec, hope_fired, instruments,
+        detection_method, confidence, flare_type, pipeline_version, provenance_hash
+    ) VALUES (
+        'EVENT_XCLASS', '2024-02-22T00:00:00', 'X', 6.3, 50000.0, 10000.0,
+        25.0, 1e49, 4.5, 120, 1, 'SOLEXS,HEL1OS', 'PEAK', 1.0, 'STANDARD', '2.0.0', 'hash_x'
+    )
+    """)
+    conn.commit()
+    conn.close()
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    # Register timeseries for all events
+    for i in range(5):
+        eid = f"EVENT_{i:05d}"
+        ts = np.zeros((100, 4))
+        ts[:, 0] = 3.0 + np.random.normal(0, 0.1, 100)
+        ts[:, 1] = 1e45 + np.random.normal(0, 1e44, 100)
+        ts[:, 2] = 0.01 + np.random.normal(0, 0.005, 100)
+        ts[:, 3] = -1.8 + np.random.normal(0, 0.05, 100)
+        orchestrator.register_timeseries(eid, ts)
+        
+    # Register timeseries for the X-class event
+    x_ts = np.zeros((100, 4))
+    t = np.linspace(0, np.pi, 100)
+    x_ts[:, 0] = 5.0 + 20.0 * np.sin(t)
+    x_ts[:, 1] = 1e46 + 1e49 * np.sin(t)
+    x_ts[:, 2] = 0.1 + 4.4 * np.sin(t)
+    x_ts[:, 3] = -1.8 + 1.2 * np.sin(t)
+    orchestrator.register_timeseries("EVENT_XCLASS", x_ts)
+    
+    orchestrator.index.rebuild()
+    
+    # Query with the X-class event
+    query_frames = make_test_physics_frames(length=100, amp=1.0)
+    # Inject X6.3 values
+    for idx, f in enumerate(query_frames):
+        f.T_MK = x_ts[idx, 0]
+        f.EM_cm3 = x_ts[idx, 1]
+        f.DNI = x_ts[idx, 2]
+        f.SHEI = x_ts[idx, 3]
+        
+    mock_forecast = ForecastFrame(
+        timestamp=datetime.utcnow(),
+        horizon_minutes=5,
+        prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+        predicted_class="X", peak_class_prob=0.9,
+        confidence_interval_low=0.8, confidence_interval_high=1.0,
+        prediction_set=["X"], calibration_ece=0.01,
+        lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+        tcn_weight=0.5, moirai_weight=0.5,
+        hope_flag_active=True, physics_state="HOPE",
+        input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+        model_version="1", schema_version="1", pipeline_version="1"
+    )
+    
+    matches = orchestrator.process(mock_forecast, query_frames)
+    
+    # At least one returned match should be class X
+    assert len(matches) > 0
+    assert any(m.goes_class == "X" for m in matches if m.event_id != "NO_ANALOG")
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
-def test_faiss_index_auto_rebuilds_after_new_catalog_entry():
-    pytest.fail("not implemented")
+def test_faiss_index_auto_rebuilds_after_new_catalog_entry(tmp_path):
+    """Verify that FAISS index automatically rebuilds when a new catalog entry is detected."""
+    db_file = str(tmp_path / "test_autorebuild.db")
+    index_file = str(tmp_path / "faiss_autorebuild.index")
+    
+    # Start with 5 events
+    populate_test_catalog(db_file, num_events=5, pattern="mixed")
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    # Register timeseries
+    for i in range(5):
+        eid = f"EVENT_{i:05d}"
+        ts = np.random.normal(size=(100, 4))
+        orchestrator.register_timeseries(eid, ts)
+        
+    orchestrator.index.rebuild()
+    assert len(orchestrator.index.event_ids) == 5
+    
+    # Perform a search
+    query_frames = make_test_physics_frames(length=100)
+    mock_forecast = ForecastFrame(
+        timestamp=datetime.utcnow(),
+        horizon_minutes=5,
+        prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+        predicted_class="C", peak_class_prob=0.8,
+        confidence_interval_low=0.7, confidence_interval_high=0.9,
+        prediction_set=["C"], calibration_ece=0.02,
+        lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+        tcn_weight=0.5, moirai_weight=0.5,
+        hope_flag_active=True, physics_state="HOPE",
+        input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+        model_version="1", schema_version="1", pipeline_version="1"
+    )
+    
+    matches1 = orchestrator.process(mock_forecast, query_frames)
+    
+    # Add a 6th event directly to the database without rebuilding index manually
+    conn = sqlite3.connect(db_file)
+    cur = conn.cursor()
+    cur.execute("""
+    INSERT INTO master_flare_catalog (
+        event_id, start_time, goes_class, goes_subclass, peak_flux_solexs, peak_flux_hel1os,
+        peak_T_MK, peak_EM_cm3, peak_DNI, hope_lead_time_sec, hope_fired, instruments,
+        detection_method, confidence, flare_type, pipeline_version, provenance_hash
+    ) VALUES (
+        'EVENT_00005', '2024-02-22T00:00:00', 'M', 2.5, 500.0, 100.0,
+        15.0, 1e47, 1.2, 120, 1, 'SOLEXS,HEL1OS', 'PEAK', 0.8, 'STANDARD', '2.0.0', 'hash_new'
+    )
+    """)
+    conn.commit()
+    conn.close()
+    
+    # Register timeseries for the new event
+    orchestrator.register_timeseries("EVENT_00005", np.random.normal(size=(100, 4)))
+    
+    # Trigger a second search, which should trigger an automatic rebuild
+    matches2 = orchestrator.process(mock_forecast, query_frames)
+    
+    assert len(orchestrator.index.event_ids) == 6
+    assert "EVENT_00005" in orchestrator.index.event_ids
 
 
-@pytest.mark.xfail(reason="Phase 6 not yet implemented", strict=False)
-def test_cold_start_empty_catalog_no_crash():
+def test_cold_start_empty_catalog_no_crash(tmp_path):
     """Cold-start with 0 events in catalog activates NO_ANALOG mode without crashing."""
-    pytest.fail("not implemented")
+    db_file = str(tmp_path / "test_cold.db")
+    index_file = str(tmp_path / "faiss_cold.index")
+    
+    # Ensure empty DB
+    conn = sqlite3.connect(db_file)
+    conn.execute("CREATE TABLE IF NOT EXISTS master_flare_catalog (event_id TEXT PRIMARY KEY);")
+    conn.commit()
+    conn.close()
+    
+    orchestrator = AnalogOrchestrator(db_url=f"sqlite:///{db_file}", index_path=index_file)
+    
+    query_frames = make_test_physics_frames(length=100)
+    mock_forecast = ForecastFrame(
+        timestamp=datetime.utcnow(),
+        horizon_minutes=5,
+        prob_quiet=0.0, prob_B=0.0, prob_C=0.0, prob_M=0.0, prob_X=0.0,
+        predicted_class="C", peak_class_prob=0.8,
+        confidence_interval_low=0.7, confidence_interval_high=0.9,
+        prediction_set=["C"], calibration_ece=0.02,
+        lead_time_estimate_sec=60, lead_time_uncertainty_sec=10,
+        tcn_weight=0.5, moirai_weight=0.5,
+        hope_flag_active=True, physics_state="HOPE",
+        input_window_start=datetime.utcnow(), input_window_end=datetime.utcnow(),
+        model_version="1", schema_version="1", pipeline_version="1"
+    )
+    
+    matches = orchestrator.process(mock_forecast, query_frames)
+    
+    assert len(matches) == 1
+    assert matches[0] == NO_ANALOG
+    assert matches[0].no_analog_flag is True

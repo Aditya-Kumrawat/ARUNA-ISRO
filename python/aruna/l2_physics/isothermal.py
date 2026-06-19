@@ -93,44 +93,55 @@ class IsothermalFitter:
         counts_fit = counts[mask]
         table = _get_shared_table()
 
-        # Estimate initial EM from spectrum integral
-        # The bremsstrahlung output scales with A * EM_cm3 where A ~ 1e-24
-        # So if we observe counts ~ 1e20, we need EM ~ 1e44
-        integrated_flux = np.sum(counts_fit)
-        if integrated_flux < 1e-10:
-            log_EM_init = 44.0
-        else:
-            # Rough estimate: counts ≈ A * EM, so EM ≈ counts / A ≈ counts * 1e24
-            log_EM_init = np.log10(max(1e40, integrated_flux * 1e24))
+        data_total = float(np.sum(counts_fit))
+        if data_total < 1e-10:
+            return FitResult(np.nan, np.nan, np.nan, np.nan, np.inf, self._backend)
 
-        def objective(params):
-            T_MK, log_EM = params
-            if T_MK <= 0.1 or T_MK > 200:
+        # 1-D optimisation over T only.
+        # For each T, the analytically-optimal EM is the one that scales the
+        # model's total flux to match the data's total flux.  This is exact
+        # because _bremsstrahlung scales linearly with EM, so:
+        #   EM_opt = EM_ref * (data_total / model_total_at_EM_ref)
+        # Temperature is recovered from the spectral *shape* alone, decoupled
+        # from the absolute amplitude.  Works for synthetic spectra (EM ~ 1e48)
+        # and real detector counts (effective EM ~ 1e30) without a response matrix.
+        _EM_REF = 1e48
+        _best   = [np.inf, _EM_REF]   # [best_chi2, best_EM] — avoids re-lookup after opt
+
+        def objective(T_arr):
+            T_MK = T_arr[0]
+            if T_MK <= 0.5 or T_MK > 200:
                 return 1e9
             try:
-                EM_cm3 = 10 ** log_EM
-                if EM_cm3 <= 0:
+                model_ref = table.lookup(T_MK, _EM_REF, energy_bins)[mask]
+                ref_total = float(np.sum(model_ref))
+                if ref_total < 1e-30:
                     return 1e9
-                model_full = table.lookup(T_MK, EM_cm3, energy_bins)
-                chi2 = _poisson_chi2(counts_fit, model_full[mask])
-                return chi2 if np.isfinite(chi2) else 1e9
+                scale         = data_total / ref_total
+                model_scaled  = model_ref * scale
+                chi2          = _poisson_chi2(counts_fit, model_scaled)
+                val           = float(chi2) if np.isfinite(chi2) else 1e9
+                if val < _best[0]:
+                    _best[0] = val
+                    _best[1] = _EM_REF * scale
+                return val
             except Exception:
                 return 1e9
 
-        res = minimize(objective, x0=[15.0, log_EM_init], method="Nelder-Mead",
-                       options={"xatol": 0.1, "fatol": 0.01, "maxiter": 600, "maxfev": 1000})
-        T_MK, EM_cm3 = res.x[0], 10 ** res.x[1]
+        res  = minimize(objective, x0=[15.0], method="Nelder-Mead",
+                        options={"xatol": 0.05, "fatol": 1e-4, "maxiter": 400, "maxfev": 600})
+        T_MK = float(res.x[0])
         chi2 = float(res.fun)
 
-        # Poisson chi2 scales with count rate and can be very large for high-count spectra.
-        # Accept fit if optimizer converged and parameters are physical.
         if not res.success or T_MK <= 0 or not np.isfinite(chi2):
             return FitResult(np.nan, np.nan, np.nan, np.nan, chi2, self._backend)
+
+        EM_cm3 = _best[1]   # analytically-optimal EM captured during optimisation
 
         return FitResult(
             T_MK=float(T_MK), EM_cm3=float(EM_cm3),
             T_uncertainty_MK=max(0.5, T_MK * 0.05),
-            EM_uncertainty=max(1e46, EM_cm3 * 0.1),
+            EM_uncertainty=max(1e46, abs(EM_cm3) * 0.1),
             chi2_reduced=chi2, backend=self._backend,
         )
 

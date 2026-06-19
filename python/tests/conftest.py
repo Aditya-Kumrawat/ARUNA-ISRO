@@ -329,6 +329,116 @@ def real_x63_solexs_frames(real_solexs_pi_path):
     return frames
 
 
+# ── L4 Forecasting fixtures ────────────────────────────────────────────────────
+
+@pytest.fixture
+def synthetic_physics_window():
+    """600 PhysicsFrames with quiet-Sun values — fills the ForecastOrchestrator buffer."""
+    import uuid
+    from aruna.models.physics import PhysicsFrame
+    from aruna.models.observation import QualityFlag
+
+    base_ts = datetime(2024, 2, 22, 0, 0, 0, tzinfo=timezone.utc)
+    rng = np.random.default_rng(42)
+    frames = []
+    for i in range(600):
+        frames.append(PhysicsFrame(
+            timestamp=base_ts + timedelta(seconds=i),
+            source_frame_ids=["sol", "hel"],
+            T_MK=float(8.0 + rng.normal(0, 0.1)),
+            T_uncertainty_MK=0.5,
+            EM_cm3=float(1e47 + rng.normal(0, 1e45)),
+            EM_uncertainty=1e45,
+            fit_chi_squared=1.1,
+            DNI=float(0.1 + rng.uniform(0, 0.05)),
+            tnpsv_magnitude=0.05,
+            tnpsv_angle_rad=0.3,
+            SHEI=-1.8,
+            dSHEI_dt=0.0,
+            HFD=float("nan"),
+            FeKa_flux=0.0,
+            QPP_period_sec=None,
+            QPP_amplitude=None,
+            dT_dt=0.0,
+            dEM_dt=0.0,
+            d2T_dt2=0.0,
+            solexs_3_6kev=300.0,
+            solexs_6_10kev=200.0,
+            hel1os_10_25kev=50.0,
+            hel1os_25_50kev=30.0,
+            hel1os_50_70kev=20.0,
+            flare_phase="QUIET",
+            hope_flag=False,
+            hope_lead_time_sec=None,
+            hope_reason=None,
+            quality_flag=QualityFlag.GOOD,
+        ))
+    return frames
+
+
+@pytest.fixture
+def synthetic_hope_window():
+    """120 PhysicsFrames with HOPE=True + rising T trajectory (HOPE-accelerated path)."""
+    import uuid
+    from aruna.models.physics import PhysicsFrame
+    from aruna.models.observation import QualityFlag
+
+    base_ts = datetime(2024, 2, 22, 1, 0, 0, tzinfo=timezone.utc)
+    frames = []
+    for i in range(120):
+        frac = i / 120.0
+        frames.append(PhysicsFrame(
+            timestamp=base_ts + timedelta(seconds=i),
+            source_frame_ids=["sol", "hel"],
+            T_MK=float(10.0 + frac * 5.0),
+            T_uncertainty_MK=0.5,
+            EM_cm3=float(1e47),
+            EM_uncertainty=1e45,
+            fit_chi_squared=1.2,
+            DNI=float(0.3 + frac * 0.5),
+            tnpsv_magnitude=0.08,
+            tnpsv_angle_rad=1.57,
+            SHEI=-1.5 + frac * 0.5,
+            dSHEI_dt=0.02,
+            HFD=float("nan"),
+            FeKa_flux=0.0,
+            QPP_period_sec=None,
+            QPP_amplitude=None,
+            dT_dt=float(0.05 + frac * 0.1),
+            dEM_dt=0.0,
+            d2T_dt2=0.0,
+            solexs_3_6kev=320.0,
+            solexs_6_10kev=210.0,
+            hel1os_10_25kev=55.0,
+            hel1os_25_50kev=32.0,
+            hel1os_50_70kev=22.0,
+            flare_phase="HOPE",
+            hope_flag=True,
+            hope_lead_time_sec=120 - i,
+            hope_reason="dT/dt>0 streak | EM flat | HEL quiet",
+            quality_flag=QualityFlag.GOOD,
+        ))
+    return frames
+
+
+@pytest.fixture
+def fake_nowcast_event():
+    """Synthetic HOPE_PRECURSOR NowcastEvent for ForecastOrchestrator trigger testing."""
+    from aruna.models.nowcast import NowcastEvent
+    return NowcastEvent(
+        alert_type="HOPE_PRECURSOR",
+        timestamp=datetime(2024, 2, 22, 1, 0, 0, tzinfo=timezone.utc),
+        goes_class="M",
+        goes_subclass=3.0,
+        confidence=0.7,
+        instruments=["SOLEXS", "HEL1OS"],
+        physics_frame_id="test-frame-id",
+        detection_method="HOPE",
+        flare_type="STANDARD",
+        lead_time_sec=120,
+    )
+
+
 @pytest.fixture(scope="session")
 def real_x63_hel1os_frames(real_x63_solexs_frames):
     """

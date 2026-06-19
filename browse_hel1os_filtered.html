@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head id="j_idt2"><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/theme.css.xhtml?ln=primefaces-aristo" /><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/fa/font-awesome.css.xhtml?ln=primefaces&amp;v=6.1" /><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/components.css.xhtml?ln=primefaces&amp;v=6.1" /><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/layout/layout.css.xhtml?ln=primefaces&amp;v=6.1" /><script type="text/javascript" src="/al1/javax.faces.resource/jquery/jquery.js.xhtml?ln=primefaces&amp;v=6.1"></script><script type="text/javascript" src="/al1/javax.faces.resource/jquery/jquery-plugins.js.xhtml?ln=primefaces&amp;v=6.1"></script><script type="text/javascript" src="/al1/javax.faces.resource/core.js.xhtml?ln=primefaces&amp;v=6.1"></script><script type="text/javascript" src="/al1/javax.faces.resource/components.js.xhtml?ln=primefaces&amp;v=6.1"></script><script type="text/javascript" src="/al1/javax.faces.resource/layout/layout.js.xhtml?ln=primefaces&amp;v=6.1"></script><script type="text/javascript" src="/al1/javax.faces.resource/jsf.js.xhtml?ln=javax.faces"></script><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/watermark/watermark.css.xhtml?ln=primefaces&amp;v=6.1" /><script type="text/javascript" src="/al1/javax.faces.resource/watermark/watermark.js.xhtml?ln=primefaces&amp;v=6.1"></script><link type="text/css" rel="stylesheet" href="/al1/javax.faces.resource/pradanStyle.css.xhtml?ln=css" /><script type="text/javascript">if(window.PrimeFaces){PrimeFaces.settings.locale='en_US';}</script>
+        <script type="text/javascript">
+            function showStatus() {
+            PF('statusDialog').show();
+            }
+            function hideStatus() {
+            PF('statusDialog').hide();
+            }
+            function hideAndRefresh() {
+            hideStatus();
+            pageRefresh();
+            }            
+            
+  
+            function bulkDownloadConfirmation(){
+                var table1=document.getElementById("tableForm:selectedDocTable_data");
+                var files1=[];
+                var row1=table1.rows;
+            
+                if((row1[0].cells)[0].innerHTML === "No records found.")
+                {
+                    alert("No data selected. Please select the data products for download using the select tool box.");
+                }
+                else{
+                    for(var i=0;i < row1.length;i++){
+                        var cell1=row1[i].cells;
+                        files1.push(cell1[0].innerHTML);     
+                    }
+                    PF('confirmDownload').show();
+                } 
+            }
+         
+         
+            function isConfirm(answer1){
+                if(answer1===true){
+                   PF('confirmDownload').hide();
+                   PF('confirmMsg').show();
+                }
+                else{
+                   PF('confirmDownload').hide();
+                }
+            }
+            
+            
+            function confirmOk(answer2){  
+                if(answer2===true){
+                    showStatus();
+                    bulkDownload();
+                    PF('confirmMsg').hide();
+                }
+                else{
+                      PF('confirmMsg').hide();
+                }
+            }
+            
+           
+            var currentIndex=0;
+        
+        
+            function bulkDownload(){
+//                $('#tableForm\\:bulkDownload').hide();
+                $('#bulkProgress').show();
+                $('#bulkProgress_text').show();
+                 
+                var bulkProgress=document.getElementById("bulkProgress");
+                var bulkProgress_text=document.getElementById("bulkProgress_text");
+
+//                var selectIndex=document.getElementById("tableForm:startIndex").value;
+//                selectIndex=parseInt(selectIndex);
+                var selectIndex=1;
+
+                var table=document.getElementById("tableForm:selectedDocTable_data");
+                var files=[];
+                var row=table.rows;
+
+                for(var i=0;i < row.length;i++){
+                    var cell=row[i].cells;
+                    if(cell[0].innerHTML) {
+                        files.push(cell[0].innerHTML);     
+                    }
+                }
+                
+                if (currentIndex < files.length) {
+                    const xhr = new XMLHttpRequest();
+                    xhr.responseType = "blob";
+                    xhr.onload = function() {
+
+                        if (this.status === 200) {
+                            const a = document.createElement('a');
+                            a.href = window.URL.createObjectURL(new Blob([this.response], {
+                                type: 'application/octet-stream' }));
+                            a.download = getFilename(files[currentIndex]);
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            currentIndex++;
+                            bulkDownload();
+                        }
+                        else {
+                                if(this.status === 401){
+                                showError("Access Denied");
+                            }
+                            else if(this.status === 403){
+                                showError("Exceeded maximum number of downloads, login again to continue.");
+    //                            const xpath=document.evaluate("/html/body/div[1]/div[2]/div[1]/div/p",document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;
+    //                            const xpath=document.evaluate("/html/body/div[1]/div[2]/div[1]/div/div/div/ul/li/span[1]",document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;                
+    //                            console.log("Xpath--"+xpath.innerHTML);
+
+
+                            }
+                            else if(this.status === 302){
+                                showError("Session Expired, login again to continue.");
+                            }
+                            else{
+                                showError("Something Went Wrong");
+                            }
+                            currentIndex=0;
+                            hideStatus();
+                        }
+                   };
+
+
+                   xhr.onprogress = function(event) {
+
+                    if (this.status === 200){
+                        if (event.lengthComputable) {
+                            
+                            bulkProgress.max=event.total;
+                            bulkProgress.value=event.loaded;
+
+                            var percent=(event.loaded/event.total)*100;
+                            console.log("File " + (currentIndex + 1) + " Download Progress:" + percent.toFixed(2) + "%");
+
+                            percent=Math.floor(percent);
+                            bulkProgress_text.innerHTML="File "+(selectIndex+currentIndex)+" ("+getFilename(files[currentIndex])+")->"+percent +"%";
+                            
+                            if((event.total === event.loaded) && (currentIndex === files.length-1)) {
+                                hideStatus();
+                                alert("Bulk Downloads Complete!");
+                            }
+                        }             
+                    }
+                };
+                
+                xhr.open('GET', files[currentIndex]);
+                xhr.send();
+            }
+            else {
+                currentIndex = 0;
+            }
+        }
+        
+        function getFilename(filepath){
+            return filepath.split('/').pop().split('?')[0];
+        }
+
+        function showError(msg){
+            document.getElementById('errorMsg').innerHTML=msg;
+            PF('errorMsgDialog').show();
+        }
+        
+        </script>
+        <title>Aditya-L1</title></head><body>
+        <div id="page" style="min-width: 1000px;">
+
+            <div id="header"><script type="text/javascript" src="/al1/javax.faces.resource/pradan.js.xhtml?ln=scripts"></script>
+
+            <style>
+                .ui-layout-pane
+                {
+                    z-index: 1000 !important;
+                }
+            </style>
+
+            <div id="header" style="width: 100%;">
+                <div style="background: #25283d;">
+                    <img src="/al1/images/isro logo-1X.png" class="isroLogo" />
+                    <div class="header">
+                        <h1 class="headerIsda">ISRO Science Data Archive (ISDA)</h1>
+                        <h1 class="headerMissionName">Aditya-L1</h1>
+                    </div>
+                </div><script id="j_idt9_s" type="text/javascript">$(function(){PrimeFaces.cw("Layout","widget_j_idt9",{id:"j_idt9",center:{paneSelector:'#j_idt10',size:"auto",resizable:false,closable:false},east:{paneSelector:'#idpMenu',size:"140",resizable:false,closable:false}});});</script><div id="j_idt9" style="width:100%; height: 60px; border: none; padding: 0px; margin: 0px;" class="ui-lg-12"><div id="j_idt10" class="ui-layout-unit ui-widget ui-widget-content ui-corner-all ui-layout-center" style="border: none; padding: 0px; margin: 0px;"><div class="ui-layout-unit-content ui-widget-content"><div id="j_idt11" class="ui-menu ui-menubar ui-widget ui-widget-content ui-corner-all ui-helper-clearfix navMenu" style="border-bottom: 4px solid orange !important;" role="menubar"><div tabindex="0" class="ui-helper-hidden-accessible"></div><ul class="ui-menu-list ui-helper-reset"><li class="ui-widget ui-menuitem ui-corner-all ui-menu-parent " role="menuitem" aria-haspopup="true"><a href="#" class="ui-menuitem-link ui-submenu-link ui-corner-all" tabindex="-1"><span class="ui-menuitem-text">Home</span><span class="ui-icon ui-icon-triangle-1-s"></span></a><ul class="ui-widget-content ui-menu-list ui-corner-all ui-helper-clearfix ui-menu-child ui-shadow" role="menu"><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" href="/al1/index.xhtml"><span class="ui-menuitem-text">AL1Browse</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" href="https://pradan.issdc.gov.in"><span class="ui-menuitem-text">PRADAN</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" rel="noopener noreferrer" href="https://www.issdc.gov.in/isda.html" target="_blank"><span class="ui-menuitem-text">ISDA</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" rel="noopener noreferrer" href="https://www.issdc.gov.in" target="_blank"><span class="ui-menuitem-text">ISSDC</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" rel="noopener noreferrer" href="https://www.istrac.gov.in" target="_blank"><span class="ui-menuitem-text">ISTRAC</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" rel="noopener noreferrer" href="https://www.isro.gov.in" target="_blank"><span class="ui-menuitem-text">ISRO</span></a></li></ul></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenuHighlight" href="/al1/protected/payload.xhtml"><span class="ui-menuitem-text">Browse and Download</span></a></li><li class="ui-widget ui-menuitem ui-corner-all ui-menu-parent " role="menuitem" aria-haspopup="true"><a href="#" class="ui-menuitem-link ui-submenu-link ui-corner-all" tabindex="-1"><span class="ui-menuitem-text">My Data Downloads</span><span class="ui-icon ui-icon-triangle-1-s"></span></a><ul class="ui-widget-content ui-menu-list ui-corner-all ui-helper-clearfix ui-menu-child ui-shadow" role="menu"><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" href="/al1/protected/history.xhtml"><span class="ui-menuitem-text">History</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" href="/al1/protected/statistics.xhtml"><span class="ui-menuitem-text">Statistics</span></a></li></ul></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all " href="/al1/protected/miscDownloads.xhtml"><span class="ui-menuitem-text">Other Downloads</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all " href="/al1/faq.xhtml"><span class="ui-menuitem-text">FAQ</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all " href="/al1/ack.xhtml"><span class="ui-menuitem-text">Acknowledgement</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all " href="/al1/disclaimer.xhtml"><span class="ui-menuitem-text">Disclaimer</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all " href="/al1/contacts.xhtml"><span class="ui-menuitem-text">Contacts</span></a></li></ul></div><script id="j_idt11_s" type="text/javascript">PrimeFaces.cw("Menubar","widget_j_idt11",{id:"j_idt11",autoDisplay:true});</script></div></div><div id="idpMenu" class="ui-layout-unit ui-widget ui-widget-content ui-corner-all ui-layout-east navLogin"><div class="ui-layout-unit-content ui-widget-content"><div id="j_idt30" class="ui-menu ui-menubar ui-widget ui-widget-content ui-corner-all ui-helper-clearfix" style="background: orange;border: none" role="menubar"><div tabindex="0" class="ui-helper-hidden-accessible"></div><ul class="ui-menu-list ui-helper-reset"><li class="ui-widget ui-menuitem ui-corner-all ui-menu-parent" role="menuitem" aria-haspopup="true"><a href="#" class="ui-menuitem-link ui-submenu-link ui-corner-all" tabindex="-1"><span class="ui-menuitem-text">Aditya</span><span class="ui-icon ui-icon-triangle-1-s"></span></a><ul class="ui-widget-content ui-menu-list ui-corner-all ui-helper-clearfix ui-menu-child ui-shadow" role="menu"><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" rel="noopener noreferrer" href="https://idp.issdc.gov.in/auth/realms/issdc/account" target="_blank"><span class="ui-menuitem-text">My Account</span></a></li><li class="ui-menuitem ui-widget ui-corner-all" role="menuitem"><a tabindex="-1" class="ui-menuitem-link ui-corner-all headerMenu" href="https://idp.issdc.gov.in/auth/realms/issdc/protocol/openid-connect/logout?post_logout_redirect_uri=https://pradan1.issdc.gov.in/al1&amp;id_token_hint=eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJwaFR0bkJuTjZ3TjRMeTI1WFRURThKZG9BNldLRDNOa3czY2VkUDRHZ3QwIn0.eyJleHAiOjE3ODE4MTMyMDAsImlhdCI6MTc4MTgxMjMwMCwiYXV0aF90aW1lIjoxNzgxODEyMjk5LCJqdGkiOiJkZjIyZWNhNC1kMzZiLTRiZmUtYjRlOC1kNWU0OTkzZGY0YjIiLCJpc3MiOiJodHRwczovL2lkcC5pc3NkYy5nb3YuaW4vYXV0aC9yZWFsbXMvaXNzZGMiLCJhdWQiOiJhbDEtcHJhZGFuLTEiLCJzdWIiOiI3NjhiOWY1NS0zOTU4LTQ2OTgtYjg2NS1mODBiZjdkNmU2NGIiLCJ0eXAiOiJJRCIsImF6cCI6ImFsMS1wcmFkYW4tMSIsInNlc3Npb25fc3RhdGUiOiJmMmZmZjhkZS1iZjQ4LTRkYzAtOWY5Yy01ZWI0Y2RmNTUwMDUiLCJhdF9oYXNoIjoiN2Zaa1NGckg0bUUtUm5CNW1iQ1o0dyIsImFjciI6IjEiLCJzaWQiOiJmMmZmZjhkZS1iZjQ4LTRkYzAtOWY5Yy01ZWI0Y2RmNTUwMDUiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwibmFtZSI6IkFkaXR5YSBLdW1yYXdhdCIsInByZWZlcnJlZF91c2VybmFtZSI6ImFkaXR5YS1rdW1yYXdhdCIsImdpdmVuX25hbWUiOiJBZGl0eWEiLCJmYW1pbHlfbmFtZSI6Ikt1bXJhd2F0IiwiZW1haWwiOiJhZGl0eWEua3VtcmF3YXQyN0BnbWFpbC5jb20ifQ.RDizItRopZt5sOSoyZxh9a5Mn309ttS_1b3SEFlspVKQ3yFgLVJDP28aGVP5tETEEWDdjoBpFIRsd3aOSwhDtWFeeYtN2nXqum5zRGDw1g7rkyMevjR13Ulr1GMmX42UduDkkzZUM7q7chEbShh0GGlLkyhMOb1gGGHfRF2A1B-1Eo_jkxuBPIE__19EwQXTSrHOvynL9iFINu9fbicjz51sPDmUw1nPjYUWPWwToVwRKprJMCAt-jOAsdCCnsngHwSNHCmQoVJtCkA0_xkIIbBkJhC0SIRMX8qPX1kSskwyA4idErxFu0-bc90Ma982P7__Zx7BwXAVOaBgzMxWyQ"><span class="ui-menuitem-text">Logout</span></a></li></ul></li></ul></div><script id="j_idt30_s" type="text/javascript">PrimeFaces.cw("Menubar","widget_j_idt30",{id:"j_idt30",autoDisplay:true});</script></div></div></div>
+                
+                <br />
+
+            </div>
+            </div>
+
+            <div id="page-content" style="position: absolute; width: 100%; " align="center">
+                
+                <div id="content" style="min-height: 500px;">
+                <div id="content" style="width: 90%; " align="justify">
+<form id="navigatorForm" name="navigatorForm" method="post" action="/al1/protected/browse.xhtml" enctype="application/x-www-form-urlencoded">
+<input type="hidden" name="navigatorForm" value="navigatorForm" />
+
+                        <br /><span style="font-size: 0.8em;font-weight: bold;"><a href="/al1/index.xhtml">AL1Browse</a>
+                            &gt;
+                            <a href="/al1/protected/payload.xhtml">Browse And Download</a>
+                            &gt;
+                            <a href="/al1/protected/browse.xhtml?id=hel1os">HEL1OS</a></span><input type="hidden" name="javax.faces.ViewState" id="j_id1:javax.faces.ViewState:0" value="6834089974488833149:-2973004283610043780" autocomplete="off" />
+</form><span id="last_release" style="float: right;">
+
+                        Last released: 
+                        <label id="j_idt47" class="ui-outputlabel ui-widget">Jun 18, 2026</label></span>
+                        <br /><b>Here is the <a href="/al1/protected/downloadFile/hel1os/HEL1OS_UserManual.pdf">HEL1OS User Manual</a> to get you started.</br>Refer <a href="/al1/protected/downloadFile/hel1os/HEL1OS_ReleaseNotes.pdf">Release Note</a></b><div id="errorMessage" class="ui-messages ui-widget" aria-live="polite"></div>
+<form id="filterForm" name="filterForm" method="post" action="/al1/protected/browse.xhtml" enctype="application/x-www-form-urlencoded">
+<input type="hidden" name="filterForm" value="filterForm" />
+<span style="float: right;"><select id="filterForm:j_idt53" name="filterForm:j_idt53" size="1" onchange="mojarra.ab(this,event,'valueChange','@this','@all')">	<option value="VIEW">VIEW</option>
+	<option value="DOWNLOAD" selected="selected">DOWNLOAD</option>
+</select> 
+                        </span><script id="filterForm:j_idt56_s" type="text/javascript">$(function(){PrimeFaces.cw("DefaultCommand","widget_filterForm_j_idt56",{id:"filterForm:j_idt56",target:"filterForm:filterButton"});});</script>
+
+                        
+
+                        <br /><input id="filterForm:j_idt58" type="submit" name="filterForm:j_idt58" value="+" class="submitButton" onclick="mojarra.ab(this,event,'action','@form','@form');return false" />
+                        <br /><div id="filterForm:filterTable" class="ui-datatable ui-widget"><div class="ui-datatable-tablewrapper"><table role="grid"><thead id="filterForm:filterTable_head"><tr role="row"><th id="filterForm:filterTable:j_idt60" class="ui-state-default" role="columnheader" scope="col" style="width: 200px;"><span class="ui-column-title"></span></th><th id="filterForm:filterTable:j_idt62" class="ui-state-default" role="columnheader" scope="col" style="width: 125px;"><span class="ui-column-title"></span></th><th id="filterForm:filterTable:j_idt64" class="ui-state-default" role="columnheader" scope="col"><span class="ui-column-title"></span></th><th id="filterForm:filterTable:j_idt138" class="ui-state-default" role="columnheader" scope="col" style="width: 25px;"><span class="ui-column-title"></span></th></tr></thead><tbody id="filterForm:filterTable_data" class="ui-datatable-data ui-widget-content"><tr data-ri="0" class="ui-widget-content ui-datatable-even" role="row"><td role="gridcell" style="width: 200px;"><select id="filterForm:filterTable:0:attr" name="filterForm:filterTable:0:attr" size="1" style="width:100%" onchange="mojarra.ab(this,event,'valueChange','@this','filterForm:filterTable:0:opr filterForm:filterTable:0:operand')">	<option value="ObservationTime;TIME_DURATION;label.Product_Details.Observation_Details.Time_Coordinates.start_date_time, label.Product_Details.Observation_Details.Time_Coordinates.stop_date_time" selected="selected">ObservationTime</option>
+	<option value="Filename;STRING;filename">Filename</option>
+	<option value="ProcessingLevel;STRING;label.Product_Details.Processing_Details.level">ProcessingLevel</option>
+	<option value="ContentType;STRING;label.Product_Details.File_Details.content_type">ContentType</option>
+	<option value="ReleaseDate;DATE_DURATION;label.release_date, label.release_date">ReleaseDate</option>
+	<option value="Quality;INTEGER;label.Product_Details.Processing_Details.Quality.assessment">Quality</option>
+	<option value="CreationTime;TIME_DURATION;label.Product_Details.File_Details.creation_date_time, label.Product_Details.File_Details.creation_date_time">CreationTime</option>
+</select></td><td role="gridcell" style="width: 125px;"><select id="filterForm:filterTable:0:opr" name="filterForm:filterTable:0:opr" size="1" style="width:100%" onchange="mojarra.ab(this,event,'valueChange','@this','filterForm:filterTable:0:operand')">	<option value="TIME_DURATION,TimeDurationIn" selected="selected">In</option>
+	<option value="TIME_DURATION,TimeDurationBefore">Before</option>
+	<option value="TIME_DURATION,TimeDurationAfter">After</option>
+</select></td><td role="gridcell"><span id="filterForm:filterTable:0:operand">From  
+                                        <span id="filterForm:filterTable:0:datetime1" class="ui-calendar" style=""><input id="filterForm:filterTable:0:datetime1_input" name="filterForm:filterTable:0:datetime1_input" type="text" aria-required="true" value="2024-02-22 00:00:00" class="ui-inputfield ui-widget ui-state-default ui-corner-all" /></span><script id="filterForm:filterTable:0:datetime1_s" type="text/javascript">$(function(){PrimeFaces.cw("Calendar","widget_filterForm_filterTable_0_datetime1",{id:"filterForm:filterTable:0:datetime1",popup:true,locale:"en_US",dateFormat:"yy-mm-dd HH:mm:ss",defaultDate:"2024-02-22 00:00:00",timeOnly:false,stepHour:1,stepMinute:1,stepSecond:1,hourMin:0,hourMax:23,minuteMin:0,minuteMax:59,secondMin:0,secondMax:59,timeInput:false,controlType:"slider"});});</script>
+                                            To  
+                                        <span id="filterForm:filterTable:0:datetime2" class="ui-calendar" style=""><input id="filterForm:filterTable:0:datetime2_input" name="filterForm:filterTable:0:datetime2_input" type="text" aria-required="true" value="2024-02-22 23:59:59" class="ui-inputfield ui-widget ui-state-default ui-corner-all" /></span><script id="filterForm:filterTable:0:datetime2_s" type="text/javascript">$(function(){PrimeFaces.cw("Calendar","widget_filterForm_filterTable_0_datetime2",{id:"filterForm:filterTable:0:datetime2",popup:true,locale:"en_US",dateFormat:"yy-mm-dd HH:mm:ss",defaultDate:"2024-02-22 23:59:59",timeOnly:false,stepHour:1,stepMinute:1,stepSecond:1,hourMin:0,hourMax:23,minuteMin:0,minuteMax:59,secondMin:0,secondMax:59,timeInput:false,controlType:"slider"});});</script></span></td><td role="gridcell" style="width: 25px;"><input id="filterForm:filterTable:0:j_idt139" type="submit" name="filterForm:filterTable:0:j_idt139" value="-" style="background: #25283d !important;" class="submitButton" onclick="mojarra.ab(this,event,'action','@form','@form');return false" /></td></tr></tbody></table></div></div><script id="filterForm:filterTable_s" type="text/javascript">$(function(){PrimeFaces.cw("DataTable","widget_filterForm_filterTable",{id:"filterForm:filterTable",groupColumnIndexes:[]});});</script><input id="filterForm:filterButton" type="submit" name="filterForm:filterButton" value="Filter" class="submitButton" onclick="PrimeFaces.monitorDownload(showStatus, hideAndRefresh);" />
+                          <a href="/al1/protected/browse.xhtml?id=hel1os">Clear</a>
+                        
+                        <br />
+                        <br /><input type="hidden" name="javax.faces.ViewState" id="j_id1:javax.faces.ViewState:1" value="6834089974488833149:-2973004283610043780" autocomplete="off" />
+</form>
+<form id="tableForm" name="tableForm" method="post" action="/al1/protected/browse.xhtml" enctype="application/x-www-form-urlencoded">
+<input type="hidden" name="tableForm" value="tableForm" />
+<button id="tableForm:j_idt144" name="tableForm:j_idt144" class=" submitButton" onclick="PrimeFaces.bcn(this,event,[function(event){PF('colSelector').show()},function(event){PrimeFaces.ab({s:&quot;tableForm:j_idt144&quot;,u:&quot;tableForm:colSelectList&quot;});return false;}]);" title="Columns" type="submit"><span class="ui-button-text ui-c">Columns</span></button><script id="tableForm:j_idt144_s" type="text/javascript">PrimeFaces.cw("CommandButton","widget_tableForm_j_idt144",{id:"tableForm:j_idt144"});</script><div id="tableForm:lazyDocTable" class="ui-datatable ui-widget ui-datatable-resizable" style="color:black;"><div class="ui-datatable-header ui-widget-header ui-corner-top">
+                                Data Products
+                                
+                            </div><div class="ui-datatable-tablewrapper"><table role="grid" style="table-layout:auto;"><thead id="tableForm:lazyDocTable_head"><tr role="row"><th id="tableForm:lazyDocTable:j_idt146" class="ui-state-default ui-selection-column ui-resizable-column" role="columnheader" scope="col" style="width: 16px;text-align: center"><span class="ui-column-title"></span><div class="ui-chkbox ui-chkbox-all ui-widget"><div class="ui-helper-hidden-accessible"><input type="checkbox" name="tableForm:lazyDocTable_checkbox" aria-label="Select All" aria-checked="false" /></div><div class="ui-chkbox-box ui-widget ui-corner-all ui-state-default"><span class="ui-chkbox-icon ui-icon ui-icon-blank ui-c"></span></div></div></th><th id="tableForm:lazyDocTable:j_idt147" class="ui-state-default ui-resizable-column" role="columnheader" aria-label="#" scope="col" style="width: 16px;text-align: center;"><span class="ui-column-title"><span style="font-weight: bold;font-size: 1.5em;">#</span></span></th><th id="tableForm:lazyDocTable:j_idt150" class="ui-state-default ui-resizable-column" role="columnheader" scope="col" style="width:200px;text-align: center"><span class="ui-column-title">
+                                    Preview
+                                </span></th><th id="tableForm:lazyDocTable:filename" class="ui-state-default ui-sortable-column ui-resizable-column state_hover" role="columnheader" scope="col"><span class="ui-column-title">
+                                        Filename
+                                    </span><span class="ui-sortable-column-icon ui-icon ui-icon-carat-2-n-s"></span></th><th id="tableForm:lazyDocTable:label_-_Product_Details_-_Observation_Details_-_Time_Coordinates_-_start_date_time" class="ui-state-default ui-sortable-column ui-resizable-column state_hover" role="columnheader" scope="col"><span class="ui-column-title">
+                                        StartTime
+                                    </span><span class="ui-sortable-column-icon ui-icon ui-icon-carat-2-n-s"></span></th><th id="tableForm:lazyDocTable:label_-_Product_Details_-_Observation_Details_-_Time_Coordinates_-_stop_date_time" class="ui-state-default ui-sortable-column ui-resizable-column state_hover" role="columnheader" scope="col"><span class="ui-column-title">
+                                        EndTime
+                                    </span><span class="ui-sortable-column-icon ui-icon ui-icon-carat-2-n-s"></span></th><th id="tableForm:lazyDocTable:label_-_Product_Details_-_File_Details_-_file_size_in_kb" class="ui-state-default ui-sortable-column ui-resizable-column state_hover" role="columnheader" scope="col"><span class="ui-column-title">
+                                        FileSizeInKB
+                                    </span><span class="ui-sortable-column-icon ui-icon ui-icon-carat-2-n-s"></span></th><th id="tableForm:lazyDocTable:j_idt170" class="ui-state-default ui-resizable-column" role="columnheader" aria-label="Info" scope="col" style="width:40px;text-align: center"><span class="ui-column-title"><span class="tableHeader" style="overflow: visible;">Info</span></span></th></tr></thead><tbody id="tableForm:lazyDocTable_data" class="ui-datatable-data ui-widget-content"><tr class="ui-widget-content ui-datatable-empty-message"><td colspan="8">No records found.</td></tr></tbody></table></div><input type="hidden" id="tableForm:lazyDocTable_selection" name="tableForm:lazyDocTable_selection" autocomplete="off" value="" /></div><script id="tableForm:lazyDocTable_s" type="text/javascript">$(function(){PrimeFaces.cw("DataTable","lazyDocsTable",{id:"tableForm:lazyDocTable",paginator:{id:['tableForm:lazyDocTable_paginator_bottom'],rows:10,rowCount:0,page:0,currentPageTemplate:'{currentPage} of {totalPages} Pages (Total: {totalRecords} rows)',alwaysVisible:false},selectionMode:"checkbox",resizableColumns:true,groupColumnIndexes:[]});});</script>
+
+                        <br /><div id="tableForm:selectedDocTable" class="ui-datatable ui-widget" style="display: none;"><div class="ui-datatable-tablewrapper"><table role="grid" style="table-layout:auto;"><thead id="tableForm:selectedDocTable_head"><tr role="row"><th id="tableForm:selectedDocTable:file-path" class="ui-state-default" role="columnheader" scope="col"><span class="ui-column-title"></span></th></tr></thead><tbody id="tableForm:selectedDocTable_data" class="ui-datatable-data ui-widget-content"><tr class="ui-widget-content ui-datatable-empty-message"><td colspan="1">No records found.</td></tr></tbody></table></div></div><script id="tableForm:selectedDocTable_s" type="text/javascript">$(function(){PrimeFaces.cw("DataTable","widget_tableForm_selectedDocTable",{id:"tableForm:selectedDocTable",groupColumnIndexes:[]});});</script>
+
+                        <br /><div id="tableForm:j_idt180"></div><script id="tableForm:j_idt180_s" type="text/javascript">$(function(){PrimeFaces.cw("AjaxStatus","widget_tableForm_j_idt180",{id:"tableForm:j_idt180",start:function(){PF('statusDialog').show()},complete:function(){PF('statusDialog').hide()}});});</script><div id="tableForm:j_idt181" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt181_title" class="ui-dialog-title">Please wait...</span></div><div class="ui-dialog-content ui-widget-content"><img id="tableForm:j_idt182" src="/al1/images/ajaxloadingbar.gif?pfdrid_c=true" alt="Loading..." /></div></div><script id="tableForm:j_idt181_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","statusDialog",{id:"tableForm:j_idt181",draggable:false,modal:true});});</script>
+
+                            <div class="ui-g">
+                                <div class="ui-lg-7 ui-md-12 ui-sm-12" style=" margin-bottom: 10px;"><span class="ui-lg-8" style="border-width:1px; border-style: solid;padding: 10px;display: block;">
+                                            Select from #
+                                            <input id="tableForm:startIndex" type="text" name="tableForm:startIndex" value="1" size="5" style="" />
+                                            
+                                            with 
+                                            <select id="tableForm:j_idt191" name="tableForm:j_idt191" size="1" onchange="mojarra.ab(this,event,'valueChange','@this','tableForm:selectSize')">	<option value="length" selected="selected">number of files</option>
+	<option value="volume">size (in MB)</option>
+</select><span id="tableForm:selectSize"><input type="text" name="tableForm:j_idt194" value="0" size="5" /></span><div style="margin-top: 25px;"><input id="tableForm:selectButton" type="submit" name="tableForm:selectButton" value="Select" class="submitButton" onclick="PrimeFaces.monitorDownload(showStatus, hideAndRefresh);" />
+                                              <input id="tableForm:clearButton" type="submit" name="tableForm:clearButton" value="Clear Selection" class="submitButton" /></div></span>
+                                    
+                                </div><div class="ui-lg-4 ui-md-12 ui-sm-12">
+
+                                    <div><progress id="bulkProgress" value="0" style="width: 110px;height: 17px; display: none"></progress>
+                                        <br />
+                                        <span id="bulkProgress_text" style="display: none"></span>         
+                                    </div><button id="tableForm:bulkDownload" name="tableForm:bulkDownload" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only submitButton preserveSpace" onclick="PrimeFaces.bcn(this,event,[function(event){PrimeFaces.monitorDownload(showStatus, hideAndRefresh);},function(event){PrimeFaces.ab({s:&quot;tableForm:bulkDownload&quot;,p:&quot;tableForm:lazyDocTable&quot;,u:&quot;tableForm:selectedDocTable&quot;,onco:function(xhr,status,args){bulkDownloadConfirmation();}});return false;}]);" style="background: #25283d !important;color: white !important;font-weight: normal !important;transition: all ease-in-out 400ms;" type="submit"><span class="ui-button-text ui-c">Bulk 
+ Download</span></button><script id="tableForm:bulkDownload_s" type="text/javascript">PrimeFaces.cw("CommandButton","widget_tableForm_bulkDownload",{id:"tableForm:bulkDownload"});</script><button id="tableForm:download" name="tableForm:download" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only submitButton preserveSpace" onclick="PrimeFaces.bcn(this,event,[function(event){PrimeFaces.monitorDownload(showStatus, hideAndRefresh);},function(event){PrimeFaces.onPost();}]);" style="background: #25283d !important;color: white !important;font-weight: normal !important;transition: all ease-in-out 400ms;" type="submit"><span class="ui-button-text ui-c">DOWNLOAD SELECTED as zip 
+(Zips a maximum of 1024.0MB data for download)</span></button><script id="tableForm:download_s" type="text/javascript">PrimeFaces.cw("CommandButton","widget_tableForm_download",{id:"tableForm:download"});</script></div>
+
+                            </div><div id="tableForm:j_idt202" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt202_title" class="ui-dialog-title">Bulk Download Options (released on trial basis)</span><a href="#" class="ui-dialog-titlebar-icon ui-dialog-titlebar-close ui-corner-all" aria-label="Close"><span class="ui-icon ui-icon-closethick"></span></a></div><div class="ui-dialog-content ui-widget-content">
+                                <div>
+                                    <div style="padding-top:10px;">
+                                        <b>For novice users: </b><br />
+                                        <u>Advantages:</u> Browser based download, doesn't require any other installations.<br />
+                                        <u>Disadvantages:</u> (1) Directory structure is not available for the downloaded files. <br />
+                                        (2) Browser compatibility/convenience has to be verified/configured with a <br />
+                                        few downloads first.<br /><br />
+                                        <input type="button" class="submitButton ui-button downloadScriptBtn" style="padding: 5px;font-weight: bold !important;background: #25283d !important;" value="Browser based Download" onclick="isConfirm(true)" />
+                                    </div>
+                                    <div style="padding-top:20px;">
+                                        <b>Script based: </b><br />
+                                        <u>Advantages:</u> Directory structure is preserved for the downloaded files.<br />
+                                        <u>Disadvantages:</u> (1) New script is required to be downloaded for every login <br />
+                                        and shall work only until a browser session is active.<br />
+                                        (2) Requires a basic know-how to run a script. <br />
+                                        (3) May need translation to batch script for windows users. <br /><br /><button id="tableForm:download1" name="tableForm:download1" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only downloadScriptBtn" onclick="PrimeFaces.bcn(this,event,[function(event){isConfirm(false)},function(event){PrimeFaces.onPost();}]);" style="font-weight: bold !important;background: #25283d !important;" type="submit"><span class="ui-button-text ui-c">Download Script</span></button><script id="tableForm:download1_s" type="text/javascript">PrimeFaces.cw("CommandButton","widget_tableForm_download1",{id:"tableForm:download1"});</script>
+                                    </div>
+                                    <div></div>
+                                </div></div></div><script id="tableForm:j_idt202_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","confirmDownload",{id:"tableForm:j_idt202",modal:true,showEffect:"fade"});});</script><div id="tableForm:j_idt205" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container dialogBox"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt205_title" class="ui-dialog-title">Error Message</span><a href="#" class="ui-dialog-titlebar-icon ui-dialog-titlebar-close ui-corner-all" aria-label="Close"><span class="ui-icon ui-icon-closethick"></span></a></div><div class="ui-dialog-content ui-widget-content">
+                                <div id="errorMsg" style="padding-top:10px;"></div>
+                                <div class="btn">
+                                    <input type="button" class="submitButton" value="OK" onclick="PF('errorMsgDialog').hide()" />
+                                </div></div></div><script id="tableForm:j_idt205_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","errorMsgDialog",{id:"tableForm:j_idt205",modal:true,showEffect:"fade",hideEffect:"fade"});});</script><div id="tableForm:j_idt207" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt207_title" class="ui-dialog-title">Confirm</span><a href="#" class="ui-dialog-titlebar-icon ui-dialog-titlebar-close ui-corner-all" aria-label="Close"><span class="ui-icon ui-icon-closethick"></span></a></div><div class="ui-dialog-content ui-widget-content">
+                                <div style="padding-top:10px;">
+                                    First try downloading with a few selections (say 2), to check browser compatibility.
+                                </div>
+                                <div style="padding-top: 10px;">Do you want to continue ? </div>
+
+                                <div class="btn">
+                                    <input type="button" class="submitButton" style="padding: 5px;font-weight: bold !important;background: #25283d !important;" value="OK" onclick="confirmOk(true)" />
+                                    <input type="button" class="submitButton" style="padding: 5px;font-weight: bold !important;background: #25283d !important;" value="CLOSE" onclick="confirmOk(false)" />
+                                </div></div></div><script id="tableForm:j_idt207_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","confirmMsg",{id:"tableForm:j_idt207",modal:true,showEffect:"fade",hideEffect:"fade"});});</script><script id="tableForm:j_idt209" type="text/javascript">pageRefresh = function() {PrimeFaces.ab({s:"tableForm:j_idt209",f:"tableForm",p:"tableForm:j_idt209",u:"tableForm",pa:arguments[0]});}</script><div id="tableForm:j_idt210" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt210_title" class="ui-dialog-title">Data Product Meta Info</span><a href="#" class="ui-dialog-titlebar-icon ui-dialog-titlebar-close ui-corner-all" aria-label="Close"><span class="ui-icon ui-icon-closethick"></span></a></div><div class="ui-dialog-content ui-widget-content"><div id="tableForm:docDetail" class="ui-treetable ui-widget ui-treetable-scrollable"><div class="ui-widget-header ui-treetable-scrollable-header"><div class="ui-treetable-scrollable-header-box"><table role="grid" style="width: auto;"><thead id="tableForm:docDetail_head"><tr role="row"><th id="tableForm:docDetail:j_idt211" class="ui-state-default ui-resizable-column" role="columnheader" style="min-width:100px;"><span class="ui-column-title"></span></th><th id="tableForm:docDetail:j_idt213" class="ui-state-default ui-resizable-column" role="columnheader" style="min-width:100px;"><span class="ui-column-title"></span></th></tr></thead></table></div></div><div class="ui-treetable-scrollable-body" style="height:700px"><table role="grid" style="width: auto;"><tbody id="tableForm:docDetail_data" class="ui-treetable-data ui-widget-content"><tr class="ui-widget-content ui-treetable-empty-message"><td colspan="2">No records found.</td></tr></tbody></table></div><div class="ui-widget-header ui-treetable-scrollable-footer"><div class="ui-treetable-scrollable-footer-box"><table role="grid" style="width: auto;"><tfoot></tfoot></table></div></div><input id="tableForm:docDetail_scrollState" name="tableForm:docDetail_scrollState" type="hidden" value="0,0" /></div><script id="tableForm:docDetail_s" type="text/javascript">$(function(){PrimeFaces.cw("TreeTable","widget_tableForm_docDetail",{id:"tableForm:docDetail",scrollable:true,scrollHeight:"700",scrollWidth:"1000"});});</script></div></div><script id="tableForm:j_idt210_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","docDialog",{id:"tableForm:j_idt210",resizable:false,modal:true,showEffect:"fade",hideEffect:"fade",responsive:true});});</script><div id="tableForm:j_idt215" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt215_title" class="ui-dialog-title">Column Selector</span></div><div class="ui-dialog-content ui-widget-content"><div id="tableForm:colSelectList" class="ui-picklist ui-widget ui-helper-clearfix"><div class="ui-picklist-list-wrapper"><ul class="ui-widget-content ui-picklist-list ui-picklist-source ui-corner-all" role="menu"><li class="ui-picklist-item ui-corner-all" data-item-value="MD5Sum;STRING;md5sum" data-item-label="MD5Sum" role="menuitem">MD5Sum</li><li class="ui-picklist-item ui-corner-all" data-item-value="CreationTime;TIME;label.Product_Details.File_Details.creation_date_time" data-item-label="CreationTime" role="menuitem">CreationTime</li></ul><select id="tableForm:colSelectList_source" name="tableForm:colSelectList_source" multiple="true" class="ui-helper-hidden"></select></div><div class="ui-picklist-buttons"><div class="ui-picklist-buttons-cell"><button type="button" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-icon-only ui-picklist-button-add" title="Add"><span class="ui-button-icon-left ui-icon ui-c ui-icon ui-icon-arrow-1-e"></span><span class="ui-button-text ui-c">Add</span></button><button type="button" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-icon-only ui-picklist-button-add-all" title="Add All"><span class="ui-button-icon-left ui-icon ui-c ui-icon ui-icon-arrowstop-1-e"></span><span class="ui-button-text ui-c">Add All</span></button><button type="button" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-icon-only ui-picklist-button-remove" title="Remove"><span class="ui-button-icon-left ui-icon ui-c ui-icon ui-icon-arrow-1-w"></span><span class="ui-button-text ui-c">Remove</span></button><button type="button" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-icon-only ui-picklist-button-remove-all" title="Remove All"><span class="ui-button-icon-left ui-icon ui-c ui-icon ui-icon-arrowstop-1-w"></span><span class="ui-button-text ui-c">Remove All</span></button></div></div><div class="ui-picklist-list-wrapper"><ul class="ui-widget-content ui-picklist-list ui-picklist-target ui-corner-all" role="menu"><li class="ui-picklist-item ui-corner-all" data-item-value="Filename;STRING;filename" data-item-label="Filename" role="menuitem">Filename</li><li class="ui-picklist-item ui-corner-all" data-item-value="StartTime;TIME;label.Product_Details.Observation_Details.Time_Coordinates.start_date_time" data-item-label="StartTime" role="menuitem">StartTime</li><li class="ui-picklist-item ui-corner-all" data-item-value="EndTime;TIME;label.Product_Details.Observation_Details.Time_Coordinates.stop_date_time" data-item-label="EndTime" role="menuitem">EndTime</li><li class="ui-picklist-item ui-corner-all" data-item-value="FileSizeInKB;INTEGER;label.Product_Details.File_Details.file_size_in_kb" data-item-label="FileSizeInKB" role="menuitem">FileSizeInKB</li></ul><select id="tableForm:colSelectList_target" name="tableForm:colSelectList_target" multiple="true" class="ui-helper-hidden"></select></div><div id="tableForm:colSelectList_ariaRegion" class="ui-helper-hidden-accessible" role="region" aria-live="polite" aria-atomic="true"></div></div><script id="tableForm:colSelectList_s" type="text/javascript">$(function(){PrimeFaces.cw("PickList","widget_tableForm_colSelectList",{id:"tableForm:colSelectList",effect:"fade",effectSpeed:"fast"});});</script><button id="tableForm:j_idt216" name="tableForm:j_idt216" class=" submitButton" onclick="PrimeFaces.bcn(this,event,[function(event){PF('colSelector').hide()},function(event){PrimeFaces.ab({s:&quot;tableForm:j_idt216&quot;,p:&quot;tableForm:colSelectList&quot;,u:&quot;tableForm:lazyDocTable&quot;});return false;}]);" title="Submit" type="submit"><span class="ui-button-text ui-c">Submit</span></button><script id="tableForm:j_idt216_s" type="text/javascript">PrimeFaces.cw("CommandButton","widget_tableForm_j_idt216",{id:"tableForm:j_idt216"});</script></div></div><script id="tableForm:j_idt215_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","colSelector",{id:"tableForm:j_idt215",resizable:false,modal:true,showEffect:"fade",hideEffect:"fade"});});</script><div id="tableForm:j_idt217" class="ui-dialog ui-widget ui-widget-content ui-corner-all ui-shadow ui-hidden-container ui-dialog-absolute"><div class="ui-dialog-titlebar ui-widget-header ui-helper-clearfix ui-corner-top"><span id="tableForm:j_idt217_title" class="ui-dialog-title">Preview</span><a href="#" class="ui-dialog-titlebar-icon ui-dialog-titlebar-close ui-corner-all" aria-label="Close"><span class="ui-icon ui-icon-closethick"></span></a></div><div class="ui-dialog-content ui-widget-content"><img id="tableForm:imgPreview" src="" alt="" class="largerPreview" /></div></div><script id="tableForm:j_idt217_s" type="text/javascript">$(function(){PrimeFaces.cw("Dialog","previewWid",{id:"tableForm:j_idt217",modal:true,showEffect:"fade",hideEffect:"fade",closeOnEscape:true});});</script><input type="hidden" name="javax.faces.ViewState" id="j_id1:javax.faces.ViewState:2" value="6834089974488833149:-2973004283610043780" autocomplete="off" />
+</form>
+                        <br />
+                        <br />
+                        <br />
+                        <b>Please refer <a href="/al1/protected/miscDownloads.xhtml#tableForm:hel1osTable" target="_blank">OtherDownloads</a> section for accompanying downloadables.</b>
+
+                </div>
+                </div>
+                
+                <div id="footer" align="center">
+            <div id="footer" align="center" style="margin: 50px;">
+                Copyright © 2020-2025 ISTRAC. All Rights Reserved.
+
+                <button id="myBtn" title="Go to top" onclick="goToTop()"><i class="fa fa-arrow-up"></i></button>
+            </div>
+                </div>
+                
+            </div>
+
+        </div></body>
+</html>

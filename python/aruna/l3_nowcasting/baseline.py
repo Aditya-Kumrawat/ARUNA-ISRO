@@ -12,7 +12,7 @@ class RollingP85Baseline:
         recompute_interval: int = 60,
         sigma_multiplier: float = 3.0,
     ) -> None:
-        self._window = deque()
+        self._window = deque(maxlen=window_sec)
         self._window_sec = window_sec
         self._percentile = percentile
         self._recompute_interval = recompute_interval
@@ -43,7 +43,7 @@ class RollingP85Baseline:
 
     def unfreeze(self) -> None:
         self._frozen = False
-        self._last_recompute = 0
+        self._last_recompute = -self._recompute_interval
 
     def is_frozen(self) -> bool:
         return self._frozen

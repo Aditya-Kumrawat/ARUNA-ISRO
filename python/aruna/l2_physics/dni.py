@@ -15,20 +15,20 @@ class DNIComputer:
     def __init__(self) -> None:
         self._cumulative_hel: float = 0.0
 
-    def update(self, hel_25_50_flux: float, sol_8_15_flux: float, dt: float = 1.0) -> float:
+    def update(self, hel_25_50_excess: float, sol_3_10_flux: float, dt: float = 1.0) -> float:
         """
         Update DNI accumulator and return current DNI value.
 
         Args:
-            hel_25_50_flux: HEL1OS hard X-ray flux [25-50 keV]
-            sol_8_15_flux: SoLEXS soft X-ray flux [8-15 keV]
-            dt: integration timestep (default 1.0 s)
+            hel_25_50_excess: HEL1OS 25-50 keV flux above quiet baseline
+            sol_3_10_flux:    SoLEXS 3-10 keV flux (always non-zero at quiet sun)
+            dt:               integration timestep (default 1.0 s)
 
         Returns:
-            DNI value: cumulative_hel / sol_8_15_flux
+            DNI value: cumulative_hel_excess / sol_3_10_flux, capped at 1000
         """
-        self._cumulative_hel += hel_25_50_flux * dt
-        return self._cumulative_hel / (sol_8_15_flux + 1e-30)
+        self._cumulative_hel += max(hel_25_50_excess, 0.0) * dt
+        return min(self._cumulative_hel / max(sol_3_10_flux, 1.0), 1000.0)
 
     def reset(self) -> None:
         """Zero the cumulative HEL1OS integral."""

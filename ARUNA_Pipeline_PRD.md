@@ -2528,7 +2528,7 @@ All reported metrics include 95% bootstrap CI (n = 2000 resamples, scipy.stats.b
 | L5 Analog Retrieval | TRL 3 | TRL 4 | FAISS + DTW coded; library population needs catalog |
 | L6 Threat Intelligence | TRL 4 | TRL 5 | Rule engine straightforward; NavIC model needs calibration |
 | L7 LLM Briefing | TRL 5 | TRL 6 | Ollama + Mistral available; template + guard coded |
-| L8 Dashboard | TRL 4 | TRL 6 | Streamlit + Plotly ready; needs live Kafka integration |
+| L8 Dashboard | TRL 4 | TRL 6 |react + graphs; needs live Kafka integration |
 | XL-1 AR Registry | TRL 2 | TRL 3 | Architecture defined; SHARP pipeline needs implementation |
 | XL-4 Ensemble | TRL 2 | TRL 3 | Sub-model designs ready; no training yet |
 | XL-5 NavIC Impact | TRL 3 | TRL 4 | Ionospheric model coded; needs S4 calibration data |

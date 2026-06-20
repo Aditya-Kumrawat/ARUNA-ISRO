@@ -37,6 +37,7 @@ class CHIANTILookupTable:
     """
     def __init__(self) -> None:
         self._interp: RegularGridInterpolator | None = None
+        self._stored_energy_bins: np.ndarray | None = None
 
     def generate(self, energy_bins: np.ndarray) -> None:
         centres = (energy_bins[:-1] + energy_bins[1:]) / 2.0
@@ -55,6 +56,7 @@ class CHIANTILookupTable:
 
     def _load(self, energy_bins: np.ndarray) -> None:
         data = np.load(_TABLE_PATH)
+        self._stored_energy_bins: np.ndarray | None = data.get("energy_bins", None)
         self._interp = RegularGridInterpolator(
             (np.log10(data["T_grid"]), np.log10(data["EM_grid"])),
             data["table"].astype(np.float64),
@@ -69,4 +71,14 @@ class CHIANTILookupTable:
                 self.generate(energy_bins)
         T_log  = np.clip(np.log10(max(T_MK,  1e-30)), np.log10(T_GRID[0]),  np.log10(T_GRID[-1]))
         EM_log = np.clip(np.log10(max(EM_cm3, 1e-30)), np.log10(EM_GRID[0]), np.log10(EM_GRID[-1]))
-        return self._interp([[T_log, EM_log]])[0]
+        result = self._interp([[T_log, EM_log]])[0]
+        expected_n = len(energy_bins) - 1
+        if len(result) != expected_n:
+            # Table was generated with different channel binning — resample analytically
+            centres = (energy_bins[:-1] + energy_bins[1:]) / 2.0
+            if self._stored_energy_bins is not None and len(self._stored_energy_bins) > 1:
+                stored_centres = (self._stored_energy_bins[:-1] + self._stored_energy_bins[1:]) / 2.0
+                result = np.interp(centres, stored_centres, result, left=0.0, right=0.0)
+            else:
+                result = _bremsstrahlung(centres, T_MK, EM_cm3)
+        return result

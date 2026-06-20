@@ -5,7 +5,7 @@
 #Caution: There are session download limits, request rate limit and session timeouts in place, etc.
 #	Violations may lead to blocking. Use script to ease the manual data download efforts but do not load the server.
 
-cookies="primefaces.download=null;FGTServer=03DE191863F4388C06A7AAAF7E0136FBD15060DF21FA637D82A675307CD5BF28BF8658CAFD950178C9994D;JSESSIONID=0dcd61c5cdf91baf0cf9e40659db;JSESSIONID=e886bc7bacea80c77c0f9b48c84f;OAuth_Token_Request_State=7d09d761-5201-4d3f-b7df-1db742f60a2c;"
+cookies="primefaces.download=null;FGTServer=03DE191863F4388C06A7AAAF7E0136FBD15060DF21FA637D82A675307CD5BF28BF8658CAFD950178CB994D;JSESSIONID=12637f61eb93dffb0321cc688b94;JSESSIONID=e886bc7bacea80c77c0f9b48c84f;OAuth_Token_Request_State=7bfaa1b6-02de-413e-b9de-fc36966bdf89;"
 urlPrefix="https://pradan1.issdc.gov.in"
 #proxyOptions are required if your organization uses proxy to connect to Internet.
 #proxyOptions="-e use_proxy=yes -e https_proxy=127.0.0.1:8080"

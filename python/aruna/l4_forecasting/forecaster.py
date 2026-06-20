@@ -14,6 +14,7 @@ import logging
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -128,9 +129,9 @@ class ForecastOrchestrator:
         self._calibrator = MapieCalibrator(self._cfg)
         self._calibrator.load()   # no-op if file missing (passthrough mode)
 
-        # TCN — loaded lazily (needs torch)
+        # TCN — only load when weights file actually exists; random init is useless
         self._tcn = None
-        if _TORCH_AVAILABLE:
+        if _TORCH_AVAILABLE and Path(self._cfg.tcn_weights_path).exists():
             from .tcn_model import load_tcn
             self._tcn = load_tcn(self._cfg.tcn_weights_path)
 
@@ -197,7 +198,8 @@ class ForecastOrchestrator:
         t_thermal, t_nonthermal, t_shared = self._extractor.extract(frames)
 
         # ── TCN forward pass ──────────────────────────────────────────────────
-        tcn_probs = self._tcn_infer(t_thermal, t_nonthermal, t_shared)
+        tcn_probs = self._tcn_infer(t_thermal, t_nonthermal, t_shared,
+                                    latest_frame=frames[-1] if frames else None)
 
         # ── Moirai zero-shot forecast ─────────────────────────────────────────
         # Build a numpy feature array for Moirai from the thermal stream
@@ -264,10 +266,29 @@ class ForecastOrchestrator:
         t_thermal: "torch.Tensor",
         t_nonthermal: "torch.Tensor",
         t_shared: "torch.Tensor",
+        latest_frame: Optional[PhysicsFrame] = None,
     ) -> np.ndarray:
         """Run TCN forward pass; return (5,) softmax probabilities."""
         if self._tcn is None or not _TORCH_AVAILABLE:
-            # Fallback: uniform distribution if torch unavailable
+            # Physics heuristic fallback when TCN weights are absent
+            if latest_frame is not None:
+                from .tcn_model import physics_heuristic_probs
+                probs = physics_heuristic_probs(
+                    hope_flag=bool(getattr(latest_frame, 'hope_flag', False)),
+                    DNI=float(getattr(latest_frame, 'DNI', 0.0)),
+                    SHEI=float(getattr(latest_frame, 'SHEI', -2.0)),
+                    T_MK=float(getattr(latest_frame, 'T_MK', 2.0)),
+                )
+                logger.debug(
+                    "TCN fallback: physics heuristic — HOPE=%s DNI=%.2f SHEI=%.2f T=%.1fMK → P(X)=%.2f",
+                    getattr(latest_frame, 'hope_flag', False),
+                    getattr(latest_frame, 'DNI', 0),
+                    getattr(latest_frame, 'SHEI', -2),
+                    getattr(latest_frame, 'T_MK', 0),
+                    probs[4],
+                )
+                return np.array(probs, dtype=np.float32)
+            logger.warning("TCN unavailable and no frame context — returning uniform distribution")
             return np.array([0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
 
         import torch

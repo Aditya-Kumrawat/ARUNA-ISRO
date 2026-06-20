@@ -28,13 +28,26 @@ class RollingP85Baseline:
             self._recompute(t_sec)
         return self._baseline, self._threshold
 
+    _MIN_FRAMES = 300  # require ~5 min before first compute to dilute transient spikes
+
     def _recompute(self, t_sec: int) -> None:
         data = list(self._window)
-        if not data:
+        if len(data) < self._MIN_FRAMES:
             return
-        self._baseline = float(np.percentile(data, self._percentile))
-        quiet = data[:3600]
-        sigma = float(np.std(quiet)) if len(quiet) >= 2 else 0.0
+        arr = np.array(data, dtype=np.float64)
+        # Robust outlier clipping: MAD-based (handles up to ~40% outliers vs std which breaks at 15%)
+        med = float(np.median(arr))
+        mad = float(np.median(np.abs(arr - med)))
+        # Convert MAD to Gaussian sigma; use 10% of median as floor to handle near-zero data
+        sigma_mad = mad / 0.6745
+        clip_hi = med + 5.0 * max(sigma_mad, med * 0.10)
+        arr_r = arr[arr <= clip_hi]
+        if len(arr_r) < len(arr) // 2:
+            arr_r = arr  # fallback: too many clipped means the distribution IS elevated
+        self._baseline = float(np.percentile(arr_r, self._percentile))
+        # Robust sigma from IQR (not sensitive to spike outliers)
+        q25, q75 = float(np.percentile(arr_r, 25)), float(np.percentile(arr_r, 75))
+        sigma = (q75 - q25) / 1.349
         self._threshold = self._baseline + self._sigma_multiplier * sigma
         self._last_recompute = t_sec
 

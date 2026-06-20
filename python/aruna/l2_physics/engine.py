@@ -85,6 +85,7 @@ class PhysicsEngine:
         self._prev_dT_dt: float      = 0.0
         self._prev_timestamp: Optional[datetime] = None
         self._hel_quiet_baseline: float = 500.0
+        self._hel_25_50_baseline: float = 5.0   # STIX quiet-sun background in 25-50 keV
         self._non_quiet_count: int = 0
         self._recent_quality: deque = deque(maxlen=self._cfg.degraded_window)
         self._state = EngineState.WARMUP
@@ -133,8 +134,15 @@ class PhysicsEngine:
 
         # ── novel observables ────────────────────────────────────────────────
         hel_25_50 = _band(hel, 25.0, 50.0)
-        sol_8_15  = _band(sol, 8.0, 15.0)
-        DNI = self._dni.update(hel_25_50, sol_8_15)
+        # Use SoLEXS 3-10 keV (main science band, always non-zero) for DNI
+        # denominator. The previous 8-15 keV band is near-zero at quiet-sun
+        # temperatures (T~2 MK) and caused DNI overflow via the 1e-30 guard.
+        sol_3_10 = _band(sol, 3.0, 10.0)
+        # Subtract pre-flare STIX background from numerator to prevent quiet-sun
+        # instrument background (dominated by ch18 at 32-36 keV) from inflating
+        # the cumulative HEL integral during non-flare periods.
+        hel_25_50_excess = max(hel_25_50 - self._hel_25_50_baseline, 0.0)
+        DNI = self._dni.update(hel_25_50_excess, max(sol_3_10, 1.0))
 
         tnpsv_mag, tnpsv_angle = (
             self._tnpsv.update(fit.T_MK, fit.EM_cm3)
@@ -193,6 +201,9 @@ class PhysicsEngine:
         if phase == "QUIET":
             self._hel_quiet_baseline = (
                 0.9 * self._hel_quiet_baseline + 0.1 * _total_flux(hel)
+            )
+            self._hel_25_50_baseline = (
+                0.9 * self._hel_25_50_baseline + 0.1 * hel_25_50
             )
             self._non_quiet_count = 0
         else:

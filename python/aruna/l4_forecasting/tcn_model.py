@@ -212,6 +212,40 @@ def load_tcn(
     return model
 
 
+def physics_heuristic_probs(
+    hope_flag: bool,
+    DNI: float,
+    SHEI: float,
+    T_MK: float,
+) -> List[float]:
+    """
+    Physics-based class probability estimate when TCN weights are unavailable.
+
+    Lookup table derived from Sarwade et al. 2025 X6.3 analysis and GOES statistics:
+      HOPE + DNI>1.5 + SHEI>-0.8  → strong impulsive X-class precursor
+      DNI>1.5 only                 → non-thermal dominant → likely M or X
+      T_MK>20 only                 → hot thermal → C–M range
+      Otherwise                    → quiet or B-class background
+
+    Returns [p_quiet, p_B, p_C, p_M, p_X] summing to 1.0.
+    """
+    if hope_flag and DNI > 1.5 and SHEI > -0.8:
+        probs = [0.00, 0.00, 0.05, 0.20, 0.75]
+    elif hope_flag and DNI > 1.5:
+        probs = [0.00, 0.02, 0.10, 0.33, 0.55]
+    elif DNI > 1.5:
+        probs = [0.01, 0.04, 0.15, 0.45, 0.35]
+    elif T_MK > 20.0:
+        probs = [0.05, 0.10, 0.35, 0.35, 0.15]
+    elif T_MK > 10.0:
+        probs = [0.15, 0.35, 0.35, 0.10, 0.05]
+    else:
+        probs = [0.60, 0.25, 0.10, 0.04, 0.01]
+
+    total = sum(probs)
+    return [p / total for p in probs]
+
+
 def asymmetric_focal_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,

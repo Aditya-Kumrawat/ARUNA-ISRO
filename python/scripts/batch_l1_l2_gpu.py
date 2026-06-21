@@ -266,6 +266,29 @@ def _fetch_stix_fallback(date_str: str) -> list:
         return []
 
 
+# ── GOES-aware day classification ─────────────────────────────────────────────
+
+def _classify_days(dates: list[str], goes: "pd.DataFrame") -> dict[str, str]:
+    """
+    Return {date_str: 'FLARE'|'ACTIVE'|'QUIET'} using the GOES event catalog.
+    FLARE = M or X class peak on that day.
+    ACTIVE = C class peak.
+    QUIET = B/A or no event.
+    """
+    _RANK = {"X": 4, "M": 3, "C": 2, "B": 1, "A": 0}
+    result: dict[str, str] = {}
+    for d in dates:
+        day_start = pd.Timestamp(f"{d[:4]}-{d[4:6]}-{d[6:]}", tz="UTC")
+        day_end   = day_start + pd.Timedelta(days=1)
+        events    = goes[(goes["peak_time"] >= day_start) & (goes["peak_time"] < day_end)]
+        if events.empty:
+            result[d] = "QUIET"
+            continue
+        max_rank = events["goes_class_letter"].str.upper().map(_RANK).fillna(0).max()
+        result[d] = "FLARE" if max_rank >= 3 else ("ACTIVE" if max_rank >= 2 else "QUIET")
+    return result
+
+
 # ── Single-day GPU processor ───────────────────────────────────────────────────
 
 def _process_day_gpu(
@@ -440,7 +463,22 @@ def run_gpu_batch(
     output_dir: str,
     device: str,
     max_days: Optional[int] = None,
+    stix_fallback: bool = False,
+    goes_file: Optional[str] = None,
+    max_quiet_days: Optional[int] = None,
 ) -> None:
+    """
+    Parameters
+    ----------
+    stix_fallback   : When True, process ALL SoLEXS days — not just those
+                      with local HEL1OS. Missing HEL1OS days go through the
+                      STIX fallback path already in _process_day_gpu.
+    goes_file       : Path to goes_events.parquet. When provided, days are
+                      sorted FLARE (M/X) → ACTIVE (C) → QUIET and quiet days
+                      are capped at max_quiet_days to prevent class imbalance.
+    max_quiet_days  : Cap on QUIET days included. Ignored if goes_file absent.
+                      Recommended: ~2× the number of FLARE days.
+    """
     import torch
     if device == "cuda" and not torch.cuda.is_available():
         logger.warning("CUDA not available — falling back to CPU (still vectorized)")
@@ -456,19 +494,56 @@ def run_gpu_batch(
 
     sol_map = _scan_dir(Path(solexs_dir))
     hel_map = _scan_dir(Path(hel1os_dir))
-    dual    = sorted(set(sol_map) & set(hel_map))
 
-    todo = [d for d in dual
-            if not (out / f"{d[:4]}-{d[4:6]}-{d[6:]}.parquet").exists()]
-    cached = len(dual) - len(todo)
+    if stix_fallback:
+        # Use every SoLEXS day; HEL1OS fallback is handled inside _process_day_gpu
+        candidate_dates = sorted(sol_map.keys())
+        dual_count = len(set(sol_map) & set(hel_map))
+        stix_count = len(candidate_dates) - dual_count
+        logger.info(
+            "stix_fallback=True: %d SoLEXS days total (%d dual-instrument + %d STIX-only)",
+            len(candidate_dates), dual_count, stix_count,
+        )
+    else:
+        candidate_dates = sorted(set(sol_map) & set(hel_map))
+
+    # ── GOES-aware prioritisation ─────────────────────────────────────────────
+    if goes_file and Path(goes_file).exists():
+        goes = pd.read_parquet(goes_file)
+        goes["peak_time"] = pd.to_datetime(goes["peak_time"], utc=True)
+        day_class = _classify_days(candidate_dates, goes)
+
+        flare_days  = [d for d in candidate_dates if day_class[d] == "FLARE"]
+        active_days = [d for d in candidate_dates if day_class[d] == "ACTIVE"]
+        quiet_days  = [d for d in candidate_dates if day_class[d] == "QUIET"]
+
+        if max_quiet_days is not None:
+            quiet_days = quiet_days[:max_quiet_days]
+
+        candidate_dates = flare_days + active_days + quiet_days
+        logger.info(
+            "GOES filter: %d FLARE + %d ACTIVE + %d QUIET (cap=%s) = %d days",
+            len(flare_days), len(active_days), len(quiet_days),
+            str(max_quiet_days), len(candidate_dates),
+        )
+    elif goes_file:
+        logger.warning("--goes-file %s not found — processing all days without GOES filter", goes_file)
+
+    # ── Filter already cached ─────────────────────────────────────────────────
+    todo   = [d for d in candidate_dates
+              if not (out / f"{d[:4]}-{d[4:6]}-{d[6:]}.parquet").exists()]
+    cached = len(candidate_dates) - len(todo)
 
     if max_days is not None and max_days < len(todo):
         todo = todo[:max_days]
 
-    print(f"\nDual-instrument days : {len(dual)}")
-    print(f"Already cached       : {cached}")
-    print(f"To process           : {len(todo)}" + (f"  (capped at --max-days {max_days})" if max_days else ""))
-    print(f"Device               : {device}\n")
+    print(f"\nSoLEXS days available : {len(sol_map)}")
+    print(f"HEL1OS days available : {len(hel_map)}")
+    print(f"Days selected         : {len(candidate_dates)}")
+    print(f"Already cached        : {cached}")
+    print(f"To process            : {len(todo)}" + (f"  (capped at --max-days {max_days})" if max_days else ""))
+    print(f"Device                : {device}")
+    print(f"STIX fallback         : {'enabled' if stix_fallback else 'disabled'}\n")
 
     if not todo:
         print("All days already cached. Nothing to do.")
@@ -481,7 +556,11 @@ def run_gpu_batch(
 
     for date_str in todo:
         ds, n_frames, elapsed, err = _process_day_gpu(
-            date_str, sol_map[date_str], hel_map[date_str], out, device
+            date_str,
+            sol_map[date_str],
+            hel_map.get(date_str, []),   # empty list → STIX path in _process_day_gpu
+            out,
+            device,
         )
         date_fmt = f"{ds[:4]}-{ds[4:6]}-{ds[6:]}"
 
@@ -502,9 +581,8 @@ def run_gpu_batch(
     print(f"  Success : {success} days  ({total_frames:,} frames total)")
     print(f"  Failed  : {failed} days")
     if success > 0 and total_time > 0:
-        avg_fps   = total_frames / total_time
-        remaining = (len(todo) - success - failed) * (total_time / success) if success else 0
-        print(f"  Avg speed : {avg_fps:.0f} frames/sec  ({total_time / success:.1f}s per day)")
+        print(f"  Avg speed : {total_frames / total_time:.0f} frames/sec  "
+              f"({total_time / success:.1f}s per day)")
     print(f"\nCache written to: {output_dir}")
     print("Next step: python python/scripts/build_dataset.py")
 
@@ -516,12 +594,27 @@ def main() -> None:
     parser.add_argument("--solexs-dir",  default="data/solexs")
     parser.add_argument("--hel1os-dir",  default="data/hel1os")
     parser.add_argument("--output-dir",  default="data/physics_cache")
-    parser.add_argument("--device",   default="cuda",
+    parser.add_argument("--device",         default="cuda",
                         help="'cuda' for GPU (recommended), 'cpu' for vectorized CPU")
-    parser.add_argument("--max-days", type=int, default=None,
-                        help="Process only the first N days (chronological). Useful for smoke-testing.")
+    parser.add_argument("--max-days",       type=int, default=None,
+                        help="Cap total days processed (chronological). Useful for smoke-testing.")
+    parser.add_argument("--stix-fallback",  action="store_true", default=False,
+                        help="Process ALL SoLEXS days, using STIX when HEL1OS is missing locally. "
+                             "Enables full 2-year SoLEXS coverage even with partial HEL1OS archive.")
+    parser.add_argument("--goes-file",      default=None,
+                        help="Path to goes_events.parquet. When provided, days are sorted "
+                             "FLARE→ACTIVE→QUIET and quiet days can be capped with --max-quiet-days.")
+    parser.add_argument("--max-quiet-days", type=int, default=None,
+                        help="Maximum QUIET days to include (requires --goes-file). "
+                             "Prevents class imbalance. Recommended: ~2× number of FLARE days.")
     args = parser.parse_args()
-    run_gpu_batch(args.solexs_dir, args.hel1os_dir, args.output_dir, args.device, args.max_days)
+    run_gpu_batch(
+        args.solexs_dir, args.hel1os_dir, args.output_dir, args.device,
+        max_days=args.max_days,
+        stix_fallback=args.stix_fallback,
+        goes_file=args.goes_file,
+        max_quiet_days=args.max_quiet_days,
+    )
 
 
 if __name__ == "__main__":

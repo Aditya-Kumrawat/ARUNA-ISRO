@@ -254,8 +254,21 @@ def train(
     Path(tcn_out).parent.mkdir(parents=True, exist_ok=True)
     log_path = Path(tcn_out).parent / "training_log.csv"
 
-    best_tss   = -999.0
-    patience   = 10
+    # Detect all-quiet val: if no M/X events, TSS is always 0 (no true positives
+    # possible), so early stopping by TSS stops training after patience epochs
+    # without the model ever having learned to detect flares.  Fall back to
+    # val_loss minimisation in that case — lower loss = better checkpoint.
+    val_labels_all = val_ds._df["label"].to_numpy()
+    val_has_flares = bool((val_labels_all >= 3).any())
+    if not val_has_flares:
+        logger.warning(
+            "Val set has ZERO M/X events — checkpointing by val_loss (not TSS). "
+            "TSS will show 0.0 every epoch; ignore it. "
+            "Evaluate real flare skill on the test set after training."
+        )
+
+    best_score = -999.0   # val_tss when val has flares; -val_loss otherwise
+    patience   = 15       # slightly larger to compensate for loss-based stopping
     no_improve = 0
 
     with open(log_path, "w", newline="") as csvfile:
@@ -324,17 +337,22 @@ def train(
             csvfile.flush()
 
             # ── Checkpoint ────────────────────────────────────────────────────
-            if val_tss > best_tss:
-                best_tss   = val_tss
+            epoch_score = val_tss if val_has_flares else -val_loss
+            if epoch_score > best_score:
+                best_score = epoch_score
                 no_improve = 0
                 torch.save(model.state_dict(), tcn_out)
-                logger.info("  → New best TSS=%.4f — saved %s", best_tss, tcn_out)
+                if val_has_flares:
+                    logger.info("  → New best TSS=%.4f — saved %s", best_score, tcn_out)
+                else:
+                    logger.info("  → New best val_loss=%.4f — saved %s", val_loss, tcn_out)
             else:
                 no_improve += 1
                 if no_improve >= patience:
-                    logger.info("Early stopping: no TSS improvement for %d epochs", patience)
+                    logger.info("Early stopping: no improvement for %d epochs", patience)
                     break
 
+    best_tss = best_score if val_has_flares else float("nan")
     logger.info("Training complete. Best val TSS = %.4f", best_tss)
     logger.info("Checkpoint saved → %s", tcn_out)
 

@@ -64,7 +64,7 @@ def _scan_dir(root: Path) -> dict[str, list[Path]]:
                 all_files.extend(entry.glob(p))
     date_map: dict[str, list[Path]] = defaultdict(list)
     for f in sorted(set(all_files)):
-        m = _DATE_RE.search(f.name)
+        m = _DATE_RE.search(f.name) or _DATE_RE.search(str(f))
         if m:
             date_map[m.group(1)].append(f)
     return dict(date_map)

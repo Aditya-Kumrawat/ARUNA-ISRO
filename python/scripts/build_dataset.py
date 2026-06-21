@@ -194,22 +194,19 @@ def _fit_scaler(train_df: pd.DataFrame, scaler_out: str) -> None:
         logger.warning("scikit-learn not installed — skipping scaler fitting")
         return
 
-    logger.info("Fitting StandardScaler on %d training windows …", len(train_df))
-    n_features = len(FEATURE_COLS)
-
-    # Reconstruct feature matrices and stack
-    all_rows = []
-    for _, row in train_df.iterrows():
-        feats = np.frombuffer(row["features_bytes"], dtype=np.float32).reshape(SEQUENCE_LENGTH, n_features)
-        all_rows.append(feats)
-
-    if not all_rows:
+    if train_df.empty:
         logger.warning("No training windows to fit scaler on")
         return
 
-    combined = np.concatenate(all_rows, axis=0)   # (N×600, 22)
+    logger.info("Fitting StandardScaler on %d training windows …", len(train_df))
+    n_features = len(FEATURE_COLS)
+
+    # Incremental fit to avoid loading all windows into RAM at once
     scaler = StandardScaler()
-    scaler.fit(combined)
+    features_bytes = train_df["features_bytes"].to_numpy()
+    for raw in features_bytes:
+        feats = np.frombuffer(raw, dtype=np.float32).reshape(SEQUENCE_LENGTH, n_features)
+        scaler.partial_fit(feats)
 
     Path(scaler_out).parent.mkdir(parents=True, exist_ok=True)
     with open(scaler_out, "wb") as fh:

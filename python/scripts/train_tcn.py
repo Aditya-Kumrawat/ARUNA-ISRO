@@ -49,7 +49,7 @@ N_THERMAL    = 9    # must match DualStreamTCN defaults
 N_NONTHERMAL = 8
 N_SHARED     = 10   # 3 base cols + 5 one-hot phase cols = 8... but model uses 10
                     # features.py adds suit_uv_flux, suit_uv_brightening_rate (→ 0 if absent)
-N_FEATURES_BASE = 22   # 8 thermal + 8 nonthermal + 3 shared_base (no phase yet)
+N_FEATURES_BASE = 19   # 8 thermal + 8 nonthermal + 3 shared_base (no phase yet)
 
 _PHASE_INDEX = {"QUIET": 0, "HOPE": 1, "IMPULSIVE": 2, "GRADUAL": 3, "DECAY": 4}
 _CLASS_NAMES = ["QUIET", "B", "C", "M", "X"]

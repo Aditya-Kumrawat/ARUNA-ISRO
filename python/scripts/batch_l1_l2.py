@@ -248,9 +248,22 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
         cdte = next((f for f in hel1os_list if "CDTE" in f.instrument.upper()), hel1os_list[0])
         hel_data, hel_flags = dtc.correct(cdte)
 
-        # ── Convert to ObservationFrames and align ────────────────────────────
-        from aruna.models.observation import ObservationFrame, QualityFlag
+        # ── Align FitsData to overlapping time range ──────────────────────────
         from aruna.l1_ingestion.alignment import TimeAligner
+
+        aligner = TimeAligner(drift_warn_sec=1.0, drift_max_sec=5.0)
+        sol_data, hel_data, _ = aligner.align(sol_data, hel_data)
+
+        n_sol = len(sol_data.timestamps)
+        n_hel = len(hel_data.timestamps)
+        if n_sol == 0 or n_hel == 0:
+            return (date_str, 0, "Alignment produced empty frame lists")
+
+        sol_flags = sol_flags[:n_sol]
+        hel_flags = hel_flags[:n_hel]
+
+        # ── Convert to ObservationFrames ──────────────────────────────────────
+        from aruna.models.observation import ObservationFrame, QualityFlag
 
         def _fits_to_obs(fd: FitsData, flags: np.ndarray) -> List[ObservationFrame]:
             frames = []
@@ -272,7 +285,7 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
                     solar_distance_au=1.0,
                     spacecraft_mode="SCIENCE",
                     saa_flag=False,
-                    source_file=str(sol_primary),
+                    source_file=str(fd.source_file),
                     checksum_sha256="",
                     pipeline_version="2.0.0",
                 ))
@@ -280,12 +293,6 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
 
         sol_obs = _fits_to_obs(sol_data, sol_flags)
         hel_obs = _fits_to_obs(hel_data, hel_flags)
-
-        aligner = TimeAligner(warn_sec=1.0, max_sec=5.0)
-        sol_obs, hel_obs = aligner.align(sol_obs, hel_obs)
-
-        if not sol_obs or not hel_obs:
-            return (date_str, 0, "Alignment produced empty frame lists")
 
         # ── L2 physics pass ───────────────────────────────────────────────────
         rows = []

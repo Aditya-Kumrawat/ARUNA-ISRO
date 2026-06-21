@@ -171,6 +171,12 @@ def _windows_to_flat_df(windows: list[dict]) -> pd.DataFrame:
         em_abs = np.abs(feats[:, _DEM_IDX])
         feats[:, _DEM_IDX] = np.sign(feats[:, _DEM_IDX]) * np.log10(1.0 + em_abs)
 
+        # Safety clamp: any remaining column outside float32 range (e.g. from
+        # a diverged GPU fitter returning T=1e15 MK) gets hard-clipped rather
+        # than silently wrapping to inf.
+        _F32 = np.finfo(np.float32).max   # 3.4028235e+38
+        feats = np.clip(feats, -_F32, _F32)
+
         # Encode phases as uint8 integers (0-4) — avoids numpy UCS-4 encoding issues
         # that would make the one-hot decoding in train_tcn.py produce all-zeros.
         phase_ints = np.array(

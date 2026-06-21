@@ -355,6 +355,7 @@ def run_batch(
     hel1os_dir: str,
     output_dir: str,
     workers: int,
+    max_days: Optional[int] = None,
 ) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -374,9 +375,12 @@ def run_batch(
     todo = [d for d in dual_dates
             if not (out / f"{d[:4]}-{d[4:6]}-{d[6:]}.parquet").exists()]
 
+    if max_days is not None and max_days < len(todo):
+        todo = todo[:max_days]
+
     print(f"Dual-instrument days : {len(dual_dates)}")
     print(f"Already cached       : {already_cached}")
-    print(f"To process           : {len(todo)}")
+    print(f"To process           : {len(todo)}" + (f"  (capped at --max-days {max_days})" if max_days else ""))
     if not todo:
         print("All days already cached. Nothing to do.")
         print("Next step: python python/scripts/build_dataset.py")
@@ -441,8 +445,10 @@ def main() -> None:
                         help="Output directory for daily Parquet files")
     parser.add_argument("--workers", type=int, default=1,
                         help="Parallel workers (use 4-8 on multi-core machines)")
+    parser.add_argument("--max-days", type=int, default=None,
+                        help="Process only the first N days (chronological). Useful for smoke-testing.")
     args = parser.parse_args()
-    run_batch(args.solexs_dir, args.hel1os_dir, args.output_dir, args.workers)
+    run_batch(args.solexs_dir, args.hel1os_dir, args.output_dir, args.workers, args.max_days)
 
 
 if __name__ == "__main__":

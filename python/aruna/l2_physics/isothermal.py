@@ -10,20 +10,34 @@ logger = logging.getLogger(__name__)
 _SunkitFit = None
 _BACKEND   = "chianti_lookup"
 
-try:
-    # sunkit-spex fitting API: SpexFitter with f_vth thermal model
-    from sunkit_spex.fitting.fitter import SpexFitter as _SunkitFit
-    _BACKEND = "sunkit_spex"
-    logger.info("IsothermalFitter: using sunkit-spex SpexFitter (f_vth) backend")
-except ImportError as _spex_err:
+# sunkit-spex moved SpexFitter between minor versions; try all known locations.
+_SPEX_CANDIDATES = [
+    ("sunkit_spex.fitting.fitter",    "SpexFitter"),   # >=0.4, <0.5
+    ("sunkit_spex.fitting",           "SpexFitter"),   # 0.5.x flat re-export
+    ("sunkit_spex.fitting.fit",       "SpexFitter"),   # possible 0.5 rename
+    ("sunkit_spex.fitting.fitter",    "Fitter"),       # alt class name
+    ("sunkit_spex.fitting",           "Fitter"),
+]
+for _mod_path, _cls_name in _SPEX_CANDIDATES:
+    try:
+        import importlib as _il
+        _mod = _il.import_module(_mod_path)
+        _SunkitFit = getattr(_mod, _cls_name)
+        _BACKEND   = "sunkit_spex"
+        logger.info("IsothermalFitter: sunkit-spex backend active (%s.%s)", _mod_path, _cls_name)
+        break
+    except (ImportError, AttributeError):
+        continue
+
+if _BACKEND == "chianti_lookup":
     try:
         import sunkit_spex as _probe
-        # Package is installed but the fitter module path is different in this version
         logger.warning(
-            "IsothermalFitter: sunkit-spex %s installed but SpexFitter not found (%s) "
+            "IsothermalFitter: sunkit-spex %s installed but no compatible fitter class found "
             "— using CHIANTILookupTable fallback. "
-            "Try: pip install --upgrade sunkit-spex",
-            getattr(_probe, '__version__', 'unknown'), _spex_err,
+            "Tried: %s",
+            getattr(_probe, '__version__', '?'),
+            ", ".join(f"{m}.{c}" for m, c in _SPEX_CANDIDATES),
         )
     except ImportError:
         logger.warning("IsothermalFitter: sunkit-spex not installed — using CHIANTILookupTable fallback")

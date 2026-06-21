@@ -154,24 +154,31 @@ def _compute_l2_features_vectorized(
     DNI = np.clip(DNI, 0.0, 10.0)
 
     # ── dT/dt, dEM/dt, d²T/dt² ───────────────────────────────────────────────
-    dT_dt   = np.gradient(np.nan_to_num(T_MK,   nan=0.0))
-    dEM_dt  = np.gradient(np.nan_to_num(EM_cm3, nan=0.0))
-    d2T_dt2 = np.gradient(dT_dt)
+    # Replace inf as well as NaN — GPU fitter can diverge to inf on dead frames
+    T_safe  = np.nan_to_num(T_MK,   nan=0.0, posinf=0.0, neginf=0.0)
+    EM_safe = np.nan_to_num(EM_cm3, nan=0.0, posinf=0.0, neginf=0.0)
+    with np.errstate(invalid='ignore'):
+        dT_dt   = np.nan_to_num(np.gradient(T_safe),  nan=0.0, posinf=0.0, neginf=0.0)
+        dEM_dt  = np.nan_to_num(np.gradient(EM_safe), nan=0.0, posinf=0.0, neginf=0.0)
+        d2T_dt2 = np.nan_to_num(np.gradient(dT_dt),   nan=0.0, posinf=0.0, neginf=0.0)
 
     # ── TNPSV — thermal-nonthermal phase space velocity ───────────────────────
-    # Magnitude and angle in log(T) vs log(EM) space
-    log_T  = np.log10(np.maximum(T_MK,  1.0))
-    log_EM = np.log10(np.maximum(EM_cm3, 1e40))
-    dlogT  = np.gradient(log_T)
-    dlogEM = np.gradient(log_EM)
+    log_T  = np.log10(np.maximum(T_safe,  1.0))
+    log_EM = np.log10(np.maximum(EM_safe, 1e40))
+    with np.errstate(invalid='ignore'):
+        dlogT  = np.nan_to_num(np.gradient(log_T),  nan=0.0, posinf=0.0, neginf=0.0)
+        dlogEM = np.nan_to_num(np.gradient(log_EM), nan=0.0, posinf=0.0, neginf=0.0)
     tnpsv_magnitude = np.sqrt(dlogT ** 2 + dlogEM ** 2)
     tnpsv_angle_rad = np.arctan2(dlogEM, dlogT + 1e-12)
 
     # ── SHEI — Spectral Hardness Evolution Index ──────────────────────────────
     hel_hard = _band_flux(hel_counts, hel_energy, 40.0, 70.0)
     hel_soft = _band_flux(hel_counts, hel_energy, 10.0, 25.0)
-    SHEI = np.log10(np.maximum(hel_hard, 1e-30) / np.maximum(hel_soft, 1e-30))
-    dSHEI_dt = np.gradient(SHEI)
+    # Clamp to floor instead of 1e-30 to avoid log10(1e-30/x) ≈ -30 outliers
+    SHEI = np.where(hel_hard <= 0.0, -3.0,
+                    np.log10(hel_hard / np.maximum(hel_soft, 1e-30)))
+    with np.errstate(invalid='ignore'):
+        dSHEI_dt = np.nan_to_num(np.gradient(SHEI), nan=0.0, posinf=0.0, neginf=0.0)
 
     # ── HFD — Higuchi Fractal Dimension (rolling window approx) ──────────────
     # Full Higuchi is per-frame stateful; here we use a sliding variance proxy

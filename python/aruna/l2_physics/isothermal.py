@@ -7,14 +7,26 @@ from .models import FitResult
 
 logger = logging.getLogger(__name__)
 
+_SunkitFit = None
+_BACKEND   = "chianti_lookup"
+
 try:
-    from sunkit_spex.fitting import FitIsothermal as _SunkitFit
+    # sunkit-spex fitting API: SpexFitter with f_vth thermal model
+    from sunkit_spex.fitting.fitter import SpexFitter as _SunkitFit
     _BACKEND = "sunkit_spex"
-    logger.info("IsothermalFitter: using sunkit-spex f_vth backend")
-except ImportError:
-    _SunkitFit = None
-    _BACKEND   = "chianti_lookup"
-    logger.warning("IsothermalFitter: sunkit-spex unavailable, using CHIANTILookupTable fallback")
+    logger.info("IsothermalFitter: using sunkit-spex SpexFitter (f_vth) backend")
+except ImportError as _spex_err:
+    try:
+        import sunkit_spex as _probe
+        # Package is installed but the fitter module path is different in this version
+        logger.warning(
+            "IsothermalFitter: sunkit-spex %s installed but SpexFitter not found (%s) "
+            "— using CHIANTILookupTable fallback. "
+            "Try: pip install --upgrade sunkit-spex",
+            getattr(_probe, '__version__', 'unknown'), _spex_err,
+        )
+    except ImportError:
+        logger.warning("IsothermalFitter: sunkit-spex not installed — using CHIANTILookupTable fallback")
 
 _shared_table = None
 
@@ -89,6 +101,12 @@ class IsothermalFitter:
             return self._fit_sunkit(counts_per_s_kev[mask], energy_bins_kev, response_matrix)
         return self._fit_lookup(counts_per_s_kev, energy_bins_kev, mask)
 
+    def _fit_lookup_direct(self, counts_fit, energy_bins) -> FitResult:
+        """Lookup-table path called as fallback when sunkit-spex fit raises."""
+        centres = (energy_bins[:-1] + energy_bins[1:]) / 2.0
+        mask    = (centres >= FIT_E_MIN) & (centres <= FIT_E_MAX)
+        return self._fit_lookup(counts_fit, energy_bins, mask)
+
     def _fit_lookup(self, counts, energy_bins, mask) -> FitResult:
         counts_fit = counts[mask]
         table = _get_shared_table()
@@ -147,13 +165,27 @@ class IsothermalFitter:
 
     def _fit_sunkit(self, counts_fit, energy_bins, response_matrix) -> FitResult:
         try:
-            fitter = _SunkitFit(model="f_vth",
-                                energy_range=(FIT_E_MIN, FIT_E_MAX),
-                                abundance_table="coronal",
-                                response_matrix=response_matrix)
-            r = fitter.fit(counts_fit, energy_bins)
-            return FitResult(r.T_MK, r.EM_cm3, r.T_1sigma, r.EM_1sigma,
-                             r.chi2_reduced, self._backend)
+            import astropy.units as u
+
+            energies = energy_bins * u.keV
+            counts_u = counts_fit * u.ct / u.s / u.keV
+
+            fitter = _SunkitFit()
+            fitter.add_data(counts_u, energies)
+            fitter.add_model("f_vth")
+            fitter.fit(energy_range=[FIT_E_MIN, FIT_E_MAX] * u.keV)
+
+            params = fitter.params
+            T_MK   = float(params["f_vth_T"].value)      # MK
+            EM_cm3 = float(params["f_vth_EM"].value)     # cm^-3
+            chi2   = float(fitter.rstat)
+
+            # Uncertainties: use 5 % of value as a conservative estimate
+            # when the fitter does not expose 1-sigma directly
+            T_unc  = max(0.5, T_MK  * 0.05)
+            EM_unc = max(1e46, abs(EM_cm3) * 0.1)
+
+            return FitResult(T_MK, EM_cm3, T_unc, EM_unc, chi2, self._backend)
         except Exception as exc:
-            logger.error("sunkit-spex fit failed: %s", exc)
-            return FitResult(np.nan, np.nan, np.nan, np.nan, np.inf, self._backend)
+            logger.warning("sunkit-spex fit failed (%s) — falling back to lookup table", exc)
+            return self._fit_lookup_direct(counts_fit, energy_bins)

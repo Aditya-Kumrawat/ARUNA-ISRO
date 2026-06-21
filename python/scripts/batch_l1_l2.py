@@ -259,8 +259,17 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
         if n_sol == 0 or n_hel == 0:
             return (date_str, 0, "Alignment produced empty frame lists")
 
-        sol_flags = sol_flags[:n_sol]
-        hel_flags = hel_flags[:n_hel]
+        # After interpolation-based alignment, the resampled instrument may have
+        # more frames than the original flags array (e.g. HEL1OS ~2157 → ~86396).
+        # Pad with zeros (GOOD flag) for the synthetic interpolated frames.
+        if n_sol > len(sol_flags):
+            sol_flags = np.pad(sol_flags, (0, n_sol - len(sol_flags)))
+        else:
+            sol_flags = sol_flags[:n_sol]
+        if n_hel > len(hel_flags):
+            hel_flags = np.pad(hel_flags, (0, n_hel - len(hel_flags)))
+        else:
+            hel_flags = hel_flags[:n_hel]
 
         # ── Convert to ObservationFrames ──────────────────────────────────────
         from aruna.models.observation import ObservationFrame, QualityFlag

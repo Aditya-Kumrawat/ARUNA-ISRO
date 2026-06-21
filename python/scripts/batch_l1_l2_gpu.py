@@ -39,6 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandera")
+
 import numpy as np
 import pandas as pd
 
@@ -75,6 +78,36 @@ def _pick_instrument(files: list[Path], keys: tuple[str, ...]) -> Optional[Path]
     candidates = pi_files or files
     for f in candidates:
         if any(k in f.name.upper() for k in keys):
+            return f
+    return None
+
+
+def _is_pradan_solexs(files: list[Path]) -> bool:
+    names = [f.name.lower() for f in files]
+    return any(".pi." in n for n in names) or any("solexs" in n and "sdd" in n for n in names)
+
+
+def _is_pradan_hel1os(files: list[Path]) -> bool:
+    names = [f.name.lower() for f in files]
+    return any("spectra" in n for n in names) or any(".pi." in n for n in names)
+
+
+def _pick_pradan_spectrum(files: list[Path], detector_keys: tuple[str, ...]) -> Optional[Path]:
+    for f in files:
+        name_up = f.name.upper()
+        if any(k in name_up for k in detector_keys) and ".PI." in name_up:
+            return f
+    for f in files:
+        name_up = f.name.upper()
+        if any(k in name_up for k in detector_keys) and "SPECTRA" in name_up:
+            return f
+    return None
+
+
+def _pick_companion_gti(files: list[Path], detector_keys: tuple[str, ...]) -> Optional[Path]:
+    for f in files:
+        name_up = f.name.upper()
+        if ".GTI." in name_up and any(k in name_up for k in detector_keys):
             return f
     return None
 
@@ -247,23 +280,36 @@ def _process_day_gpu(
 
         from aruna.l1_ingestion.fits_reader import FitsReader
         from aruna.l1_ingestion.deadtime import DeadTimeCorrector
+        from aruna.l1_ingestion.alignment import TimeAligner
         from aruna.l2_physics.gpu_isothermal import GPUIsothermalFitter
 
         reader = FitsReader()
         dtc    = DeadTimeCorrector()
 
         # ── SoLEXS ────────────────────────────────────────────────────────────
-        sol_path = _pick_instrument(solexs_files, ("SLX", "SOLEXS", "SDD"))
-        if sol_path is None:
+        sol_primary = _pick_instrument(solexs_files, ("SLX", "SOLEXS", "SDD"))
+        if sol_primary is None:
             return (date_str, 0, 0.0, "No SoLEXS file")
 
-        solexs_list = reader.read_solexs(sol_path)
+        if _is_pradan_solexs(solexs_files):
+            solexs_list = []
+            for det in ("SDD1", "SDD2"):
+                pi_path = _pick_pradan_spectrum(solexs_files, (det,))
+                if pi_path is None:
+                    continue
+                gti_path = _pick_companion_gti(solexs_files, (det,))
+                solexs_list.extend(reader.read_solexs_pradan_pi(
+                    pi_path, gti_path=gti_path, detector=det,
+                    window_center_unix=None, window_sec=86400,
+                ))
+        else:
+            solexs_list = reader.read_solexs(sol_primary)
+
         if not solexs_list:
             return (date_str, 0, 0.0, "Empty SoLEXS list")
 
         sdd1 = next((f for f in solexs_list if "SDD1" in f.instrument.upper()), None)
         sdd2 = next((f for f in solexs_list if "SDD2" in f.instrument.upper()), None)
-
         if sdd1 and sdd2:
             c1, f1 = dtc.correct(sdd1)
             c2, f2 = dtc.correct(sdd2)
@@ -271,44 +317,53 @@ def _process_day_gpu(
         else:
             sol_data, _ = dtc.correct(solexs_list[0])
 
-        # Extract SoLEXS timestamps and energy bins before HEL1OS branching
-        sol_ts     = sol_data.timestamps        # (N_sol,) datetime64
         sol_energy = sol_data.energy_bins_kev
 
-        # ── HEL1OS: two-path resolution ───────────────────────────────────────
-        hel_path = _pick_instrument(hel1os_files, ("HEL", "HXS"))
+        # ── HEL1OS ────────────────────────────────────────────────────────────
+        hel_primary = _pick_instrument(hel1os_files, ("HEL", "HXS", "HXMT", "CDTE", "CZT"))
 
-        if hel_path is not None:
-            # Path A: PRADAN HEL1OS file found
-            hel1os_list = reader.read_hel1os(hel_path)
+        if hel_primary is not None:
+            if _is_pradan_hel1os(hel1os_files):
+                hel1os_list = []
+                for det, keys in (("CDTE", ("CDTE",)), ("CZT", ("CZT",))):
+                    spec_path = _pick_pradan_spectrum(hel1os_files, keys)
+                    if spec_path is None:
+                        continue
+                    gti_path = _pick_companion_gti(hel1os_files, keys)
+                    hel1os_list.extend(reader.read_hel1os_pradan_pi(
+                        spec_path, gti_path=gti_path, detector=det,
+                        window_center_unix=None, window_sec=86400,
+                    ))
+            else:
+                hel1os_list = reader.read_hel1os(hel_primary)
+
             if not hel1os_list:
                 return (date_str, 0, 0.0, "Empty HEL1OS list")
 
-            cdte = next(
-                (f for f in hel1os_list if "CDTE" in f.instrument.upper()),
-                hel1os_list[0],
-            )
-            hel_data, _ = dtc.correct(cdte)
-            hel_ts = hel_data.timestamps
+            cdte = next((f for f in hel1os_list if "CDTE" in f.instrument.upper()), hel1os_list[0])
+            hel_data, hel_flags = dtc.correct(cdte)
+            hel_energy = hel_data.energy_bins_kev
 
-            t_start = max(sol_ts[0],  hel_ts[0])
-            t_end   = min(sol_ts[-1], hel_ts[-1])
+            # Use TimeAligner to handle clock drifts (PRADAN CDTE often has
+            # 300-1200s drift vs SoLEXS; simple timestamp masking loses the day)
+            aligner = TimeAligner(drift_warn_sec=1.0, drift_max_sec=5.0)
+            sol_data, hel_data, _ = aligner.align(sol_data, hel_data)
 
-            sol_mask = (sol_ts >= t_start) & (sol_ts <= t_end)
-            hel_mask = (hel_ts >= t_start) & (hel_ts <= t_end)
+            N = min(len(sol_data.timestamps), len(hel_data.timestamps))
+            if N < 60:
+                return (date_str, 0, 0.0, f"Too few aligned frames: {N}")
 
-            sol_counts     = sol_data.counts_raw[sol_mask]
-            hel_counts     = hel_data.counts_raw[hel_mask]
-            sol_ts_aligned = sol_ts[sol_mask]
-            hel_energy     = hel_data.energy_bins_kev
+            sol_counts     = sol_data.counts_raw[:N]
+            hel_counts     = hel_data.counts_raw[:N]
+            sol_ts_aligned = sol_data.timestamps[:N]
 
         else:
-            # Path B: no PRADAN file -- try STIX fallback (Solar Orbiter)
+            # No PRADAN HEL1OS — try STIX fallback (Solar Orbiter)
             hel_obs = _fetch_stix_fallback(date_str)
             if not hel_obs:
                 return (date_str, 0, 0.0, "No HEL1OS file and STIX unavailable")
 
-            logger.info("%s -- HEL1OS missing, using STIX fallback (%d frames)",
+            logger.info("%s — HEL1OS missing, using STIX fallback (%d frames)",
                         date_str, len(hel_obs))
 
             hel_counts = np.array([f.counts_per_s_kev for f in hel_obs], dtype=np.float32)
@@ -318,21 +373,18 @@ def _process_day_gpu(
                 np.datetime64(f.timestamp.replace(tzinfo=None).isoformat(), 'ns')
                 for f in hel_obs
             ])
+            sol_ts   = sol_data.timestamps
+            sol_mask = (sol_ts >= stix_ts[0]) & (sol_ts <= stix_ts[-1])
 
-            sol_mask2      = (sol_ts >= stix_ts[0]) & (sol_ts <= stix_ts[-1])
-            sol_counts     = sol_data.counts_raw[sol_mask2]
-            sol_ts_aligned = sol_ts[sol_mask2]
+            N = min(int(sol_mask.sum()), len(hel_counts))
+            if N < 60:
+                return (date_str, 0, 0.0, f"Too few aligned frames: {N}")
 
-        # ── Trim both arrays to same length ───────────────────────────────────
-        N = min(len(sol_counts), len(hel_counts))
-        if N < 60:
-            return (date_str, 0, 0.0, f"Too few aligned frames: {N}")
+            sol_counts     = sol_data.counts_raw[sol_mask][:N]
+            sol_ts_aligned = sol_ts[sol_mask][:N]
+            hel_counts     = hel_counts[:N]
 
-        sol_counts     = sol_counts[:N]
-        hel_counts     = hel_counts[:N]
-        sol_ts_aligned = sol_ts_aligned[:N]
-
-        # ── GPU isothermal fitting — the whole day in one call ────────────────
+        # ── GPU isothermal fitting — whole day in one batched call ────────────
         fitter = GPUIsothermalFitter(sol_energy, device=device)
         T_MK, EM_cm3, chi2 = fitter.fit_batch(sol_counts)
 
@@ -341,12 +393,12 @@ def _process_day_gpu(
             sol_counts, hel_counts, sol_energy, hel_energy, T_MK, EM_cm3
         )
 
-        # ── Build timestamps ───────────────────────────────────────────────────
-        epoch = np.datetime64('1970-01-01T00:00:00', 'ns')
+        # ── Build ISO 8601 timestamps ─────────────────────────────────────────
+        epoch  = np.datetime64('1970-01-01T00:00:00', 'ns')
         ts_sec = (sol_ts_aligned - epoch) / np.timedelta64(1, 's')
         timestamps = [
             datetime.fromtimestamp(float(s), tz=timezone.utc).isoformat()
-            for s in ts_sec[:N]
+            for s in ts_sec
         ]
 
         # ── Assemble Parquet ──────────────────────────────────────────────────
@@ -356,7 +408,15 @@ def _process_day_gpu(
             "fit_chi2":     chi2[:N].tolist(),
             "quality_flag": ["GOOD"] * N,
         })
-        df.to_parquet(out_path, index=False)
+
+        # Atomic write — rename prevents corrupt cache on crash
+        tmp_path = out_path.with_suffix(".tmp.parquet")
+        try:
+            df.to_parquet(tmp_path, index=False)
+            tmp_path.rename(out_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
         elapsed = time.monotonic() - t0
         return (date_str, N, elapsed, "")
@@ -372,6 +432,7 @@ def run_gpu_batch(
     hel1os_dir: str,
     output_dir: str,
     device: str,
+    max_days: Optional[int] = None,
 ) -> None:
     import torch
     if device == "cuda" and not torch.cuda.is_available():
@@ -394,9 +455,12 @@ def run_gpu_batch(
             if not (out / f"{d[:4]}-{d[4:6]}-{d[6:]}.parquet").exists()]
     cached = len(dual) - len(todo)
 
+    if max_days is not None and max_days < len(todo):
+        todo = todo[:max_days]
+
     print(f"\nDual-instrument days : {len(dual)}")
     print(f"Already cached       : {cached}")
-    print(f"To process           : {len(todo)}")
+    print(f"To process           : {len(todo)}" + (f"  (capped at --max-days {max_days})" if max_days else ""))
     print(f"Device               : {device}\n")
 
     if not todo:
@@ -445,10 +509,12 @@ def main() -> None:
     parser.add_argument("--solexs-dir",  default="data/solexs")
     parser.add_argument("--hel1os-dir",  default="data/hel1os")
     parser.add_argument("--output-dir",  default="data/physics_cache")
-    parser.add_argument("--device",      default="cuda",
+    parser.add_argument("--device",   default="cuda",
                         help="'cuda' for GPU (recommended), 'cpu' for vectorized CPU")
+    parser.add_argument("--max-days", type=int, default=None,
+                        help="Process only the first N days (chronological). Useful for smoke-testing.")
     args = parser.parse_args()
-    run_gpu_batch(args.solexs_dir, args.hel1os_dir, args.output_dir, args.device)
+    run_gpu_batch(args.solexs_dir, args.hel1os_dir, args.output_dir, args.device, args.max_days)
 
 
 if __name__ == "__main__":

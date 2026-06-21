@@ -49,7 +49,7 @@ TRAIN_END   = pd.Timestamp("2024-06-30 23:59:59", tz="UTC")
 VAL_START   = pd.Timestamp("2024-07-01", tz="UTC")
 VAL_END     = pd.Timestamp("2024-12-31 23:59:59", tz="UTC")
 TEST_START  = pd.Timestamp("2025-01-01", tz="UTC")
-TEST_END    = pd.Timestamp("2025-06-30 23:59:59", tz="UTC")
+TEST_END    = pd.Timestamp("2026-12-31 23:59:59", tz="UTC")  # extended: friend has 2026 data
 
 # Feature columns fed to the TCN (must match FeatureExtractor order)
 THERMAL_COLS = [
@@ -72,6 +72,13 @@ _CLASS_MAP = {"A": 0, "B": 1, "C": 2, "M": 3, "X": 4}
 _PHASE_TO_INT: dict[str, int] = {
     "QUIET": 0, "HOPE": 1, "IMPULSIVE": 2, "GRADUAL": 3, "DECAY": 4,
 }
+
+# EM_cm3 spans ~1e40–1e52, which overflows float32 (max ~3.4e38).
+# Log-transform before float32 cast keeps it in the ~40–52 range.
+# dEM_dt (derivative of EM) also large — use symmetric log.
+# These indices are into FEATURE_COLS; must stay in sync with that list.
+_EM_IDX   = FEATURE_COLS.index("EM_cm3")
+_DEM_IDX  = FEATURE_COLS.index("dEM_dt")
 
 
 # ── GOES label join ────────────────────────────────────────────────────────────
@@ -156,6 +163,14 @@ def _windows_to_flat_df(windows: list[dict]) -> pd.DataFrame:
     """
     rows = []
     for w in windows:
+        feats = w["features"].copy()   # (600, F) float64
+
+        # EM_cm3 (~1e40–1e52) overflows float32 — store as log10.
+        # dEM_dt (same scale) — store as symmetric log so sign is preserved.
+        feats[:, _EM_IDX]  = np.log10(np.maximum(feats[:, _EM_IDX],  1e30))
+        em_abs = np.abs(feats[:, _DEM_IDX])
+        feats[:, _DEM_IDX] = np.sign(feats[:, _DEM_IDX]) * np.log10(1.0 + em_abs)
+
         # Encode phases as uint8 integers (0-4) — avoids numpy UCS-4 encoding issues
         # that would make the one-hot decoding in train_tcn.py produce all-zeros.
         phase_ints = np.array(
@@ -163,7 +178,7 @@ def _windows_to_flat_df(windows: list[dict]) -> pd.DataFrame:
             dtype=np.uint8,
         )
         rows.append({
-            "features_bytes": w["features"].astype(np.float32).tobytes(),
+            "features_bytes": feats.astype(np.float32).tobytes(),
             "phases_bytes":   phase_ints.tobytes(),   # (SEQUENCE_LENGTH,) uint8
             "label":          w["label"],
             "window_end":     w["window_end"],

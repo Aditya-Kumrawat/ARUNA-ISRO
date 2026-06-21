@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import pickle
 import re
 import sys
 import time
 import traceback
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -236,10 +238,44 @@ def _compute_l2_features_vectorized(
 
 # ── STIX fallback for missing HEL1OS ──────────────────────────────────────────
 
+# Disk cache for STIX downloads. The network fetch is the single biggest cost
+# in the whole batch (one round-trip to the Solar Orbiter data center per day),
+# so we cache every result — including empty ones, which mark "no STIX coverage
+# this day" and stop reruns from re-hitting hundreds of dead days. To force a
+# re-download (e.g. after a transient network outage) just delete this folder.
+_STIX_CACHE_DIR = Path("data/stix_cache")
+
+
+def _stix_cache_path(date_str: str) -> Path:
+    return _STIX_CACHE_DIR / f"{date_str}.pkl"
+
+
+def _fetch_stix_raw(date_str: str) -> list:
+    """Actual STIX network fetch for one day. No caching. Returns frames or []."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
+        from aruna.l1_ingestion.stix_provider import STIXProvider
+
+        date  = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+        start = f"{date}T00:00:00"
+        end   = f"{date}T23:59:59"
+
+        return STIXProvider().fetch(start, end)
+    except ImportError:
+        logger.debug("stixdcpy not installed — STIX fallback unavailable (pip install stixdcpy)")
+        return []
+    except Exception as exc:
+        logger.debug("STIX fetch failed for %s: %s", date_str, exc)
+        return []
+
+
 def _fetch_stix_fallback(date_str: str) -> list:
     """
-    Try to fetch Solar Orbiter STIX data as HEL1OS substitute for a given date.
+    Cache-aware STIX fetch used as HEL1OS substitute for a given date.
     Returns List[ObservationFrame] or empty list if unavailable.
+
+    Reads the disk cache first (populated by _prefetch_stix_parallel before the
+    main GPU loop), so the per-day loop never blocks on the network.
 
     STIX is the correct fallback for X-class events:
     - Independent instrument (not derived from SoLEXS)
@@ -247,23 +283,63 @@ def _fetch_stix_fallback(date_str: str) -> list:
     - Already calibrated and channel-mapped in STIXProvider
     - Critical for X6.3 (2024-02-22) where HEL1OS may be missing on PRADAN
     """
+    cache_path = _stix_cache_path(date_str)
+    if cache_path.exists():
+        try:
+            with open(cache_path, "rb") as fh:
+                return pickle.load(fh)
+        except Exception:
+            pass  # corrupt cache entry → re-fetch below
+
+    frames = _fetch_stix_raw(date_str)
+
     try:
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
-        from aruna.l1_ingestion.stix_provider import STIXProvider
+        _STIX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(".tmp.pkl")
+        with open(tmp, "wb") as fh:
+            pickle.dump(frames, fh)
+        tmp.rename(cache_path)
+    except Exception:
+        pass  # caching is best-effort; never fail the run over it
 
-        date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
-        start = f"{date}T00:00:00"
-        end   = f"{date}T23:59:59"
+    return frames
 
-        provider = STIXProvider()
-        frames = provider.fetch(start, end)
-        return frames
-    except ImportError:
-        logger.debug("stixdcpy not installed — STIX fallback unavailable (pip install stixdcpy)")
-        return []
-    except Exception as exc:
-        logger.debug("STIX fetch failed for %s: %s", date_str, exc)
-        return []
+
+def _prefetch_stix_parallel(dates: list[str], workers: int) -> None:
+    """
+    Download STIX for all given dates concurrently into the disk cache.
+
+    STIX fetches are network-bound (the GIL is released during the HTTP round
+    trip), so a thread pool collapses what would be hours of sequential
+    downloads into minutes. The main GPU loop then reads everything from cache.
+    """
+    _STIX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    pending = [d for d in dates if not _stix_cache_path(d).exists()]
+    if not pending:
+        logger.info("STIX prefetch: all %d STIX-only days already cached", len(dates))
+        return
+
+    logger.info("STIX prefetch: downloading %d days with %d parallel workers "
+                "(%d already cached) …", len(pending), workers, len(dates) - len(pending))
+    t0 = time.monotonic()
+    done = 0
+    with_data = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_fetch_stix_fallback, d): d for d in pending}
+        for fut in as_completed(futures):
+            done += 1
+            try:
+                if fut.result():
+                    with_data += 1
+            except Exception as exc:
+                logger.debug("STIX prefetch %s error: %s", futures[fut], exc)
+            if done % 25 == 0 or done == len(pending):
+                rate = done / max(time.monotonic() - t0, 1e-6)
+                eta  = (len(pending) - done) / max(rate, 1e-6)
+                logger.info("STIX prefetch: %d/%d done (%d with data, %.1f days/s, ETA %.0fs)",
+                            done, len(pending), with_data, rate, eta)
+    logger.info("STIX prefetch complete in %.0fs — %d/%d days returned data.",
+                time.monotonic() - t0, with_data, len(pending))
 
 
 # ── GOES-aware day classification ─────────────────────────────────────────────
@@ -466,6 +542,7 @@ def run_gpu_batch(
     stix_fallback: bool = False,
     goes_file: Optional[str] = None,
     max_quiet_days: Optional[int] = None,
+    stix_workers: int = 12,
 ) -> None:
     """
     Parameters
@@ -549,6 +626,15 @@ def run_gpu_batch(
         print("All days already cached. Nothing to do.")
         return
 
+    # ── Parallel STIX prefetch ────────────────────────────────────────────────
+    # Download every STIX-only day concurrently into the disk cache BEFORE the
+    # sequential GPU loop. This is the optimisation that brings the full run
+    # from many hours down to ~1 hour: the GPU loop never waits on the network.
+    if stix_fallback:
+        stix_only = [d for d in todo if not hel_map.get(d)]
+        if stix_only:
+            _prefetch_stix_parallel(stix_only, stix_workers)
+
     success = 0
     failed  = 0
     total_frames = 0
@@ -607,6 +693,10 @@ def main() -> None:
     parser.add_argument("--max-quiet-days", type=int, default=None,
                         help="Maximum QUIET days to include (requires --goes-file). "
                              "Prevents class imbalance. Recommended: ~2× number of FLARE days.")
+    parser.add_argument("--stix-workers",   type=int, default=12,
+                        help="Parallel download threads for STIX prefetch (default 12). "
+                             "Raise for faster downloads on a fast link; lower if the "
+                             "STIX data center starts throttling/erroring.")
     args = parser.parse_args()
     run_gpu_batch(
         args.solexs_dir, args.hel1os_dir, args.output_dir, args.device,
@@ -614,6 +704,7 @@ def main() -> None:
         stix_fallback=args.stix_fallback,
         goes_file=args.goes_file,
         max_quiet_days=args.max_quiet_days,
+        stix_workers=args.stix_workers,
     )
 
 

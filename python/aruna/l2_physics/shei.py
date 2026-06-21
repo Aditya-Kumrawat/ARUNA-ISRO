@@ -55,12 +55,24 @@ class SHEIComputer:
         F_hard = float(np.sum(counts[(centres >= 40) & (centres <= 70)]))
         F_soft = float(np.sum(counts[(centres >= 10) & (centres <= 25)]))
 
-        # SHEI = log10(hard / soft)
-        shei = float(np.log10(F_hard / (F_soft + 1e-30)))
+        # SHEI = log10(hard / soft). Quiet-sun frames have F_hard ≈ 0 (below
+        # detection threshold), so clamp to a physical floor instead of letting
+        # log10(0) produce -inf, which propagates as NaN through np.gradient.
+        if F_hard <= 0.0:
+            shei = -3.0  # below-detection floor; thermal-dominated quiet sun
+        else:
+            shei = float(np.log10(F_hard / (F_soft + 1e-30)))
 
         self._history.append(shei)
 
         # Time derivative: use numpy.gradient on history
-        dshei_dt = float(np.gradient(np.array(self._history))[-1]) if len(self._history) >= 2 else 0.0
+        if len(self._history) >= 2:
+            arr = np.array(self._history, dtype=np.float64)
+            with np.errstate(invalid='ignore'):
+                dshei_dt = float(np.gradient(arr)[-1])
+            if not np.isfinite(dshei_dt):
+                dshei_dt = 0.0
+        else:
+            dshei_dt = 0.0
 
         return shei, dshei_dt

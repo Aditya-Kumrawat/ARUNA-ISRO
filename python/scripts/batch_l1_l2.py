@@ -36,6 +36,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+import warnings
+# Pandera import path changed in >=0.19; suppress until they remove the old API
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandera")
+
 import numpy as np
 import pandas as pd
 
@@ -316,7 +320,28 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
             return (date_str, 0, "L2 produced no valid PhysicsFrames")
 
         df = pd.DataFrame(rows)
-        df.to_parquet(out_path, index=False)
+
+        # Guardrail: warn if any physics column is >50 % NaN/zero (bad day)
+        numeric_cols = [c for c in df.columns if df[c].dtype in (float, "float64", "float32")]
+        nan_rates = df[numeric_cols].isna().mean()
+        bad_cols = nan_rates[nan_rates > 0.5].index.tolist()
+        if bad_cols:
+            logger.warning("%s: >50%% NaN in %s — data quality suspect", date_str, bad_cols)
+
+        # Warn on sparse days but still write (build_dataset skips windows with too many NaN)
+        if len(rows) < 3600:
+            logger.warning("%s: only %d frames (< 1 hour) — sparse day", date_str, len(rows))
+
+        # Atomic write: use a .tmp file and rename on success so a crash mid-write
+        # does not leave a corrupt Parquet that looks cached on the next run.
+        tmp_path = out_path.with_suffix(".tmp.parquet")
+        try:
+            df.to_parquet(tmp_path, index=False)
+            tmp_path.rename(out_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
         return (date_str, len(rows), "")
 
     except Exception as exc:

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -98,86 +98,161 @@ def _download_via_hek(start: str, end: str) -> pd.DataFrame:
     return df
 
 
-# ── Fallback: NOAA NCEI CSV download ──────────────────────────────────────────
+# ── Fallback 1: NASA DONKI REST API ───────────────────────────────────────────
 
-def _download_via_ncei(start: str, end: str) -> pd.DataFrame:
+def _download_via_donki(start: str, end: str) -> pd.DataFrame:
     """
-    Fallback: download GOES flare list from NOAA NCEI directly.
-    Uses the legacy solar events CSV — always publicly accessible.
+    Download GOES flare catalog from NASA CCMC DONKI REST API.
+    Chunked into 6-month windows (API limit). Always publicly accessible.
+    https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR
     """
     import urllib.request
-    import io
+    import json
 
-    print("HEK unavailable — trying NOAA NCEI CSV fallback …")
+    print("HEK unavailable — trying NASA DONKI API …")
 
-    start_year = int(start[:4])
-    end_year   = int(end[:4])
-    all_rows   = []
+    start_dt = datetime.strptime(start[:10], "%Y-%m-%d")
+    end_dt   = datetime.strptime(end[:10],   "%Y-%m-%d")
 
-    for year in range(start_year, end_year + 1):
+    all_rows: list[dict] = []
+    chunk_start = start_dt
+
+    while chunk_start <= end_dt:
+        chunk_end = min(chunk_start + timedelta(days=180), end_dt)
         url = (
-            f"https://www.ngdc.noaa.gov/stp/space-weather/solar-data/"
-            f"solar-features/solar-flares/x-rays/goes/xrs/"
-            f"goes-xrs-report_{year}.txt"
+            "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR"
+            f"?startDate={chunk_start.strftime('%Y-%m-%d')}"
+            f"&endDate={chunk_end.strftime('%Y-%m-%d')}"
         )
         try:
-            print(f"  Fetching {year} from NCEI …")
-            with urllib.request.urlopen(url, timeout=30) as resp:
-                text = resp.read().decode("latin-1")
-            # Parse fixed-width NCEI format
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or len(line) < 40:
+            print(f"  Fetching {chunk_start.date()} → {chunk_end.date()} …")
+            req = urllib.request.Request(url, headers={"User-Agent": "ARUNA-Pipeline/2.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                events = json.loads(resp.read().decode())
+            if not events:
+                chunk_start = chunk_end + timedelta(days=1)
+                continue
+            for ev in events:
+                cls_raw = (ev.get("classType") or "").strip()
+                letter, number = parse_goes_class(cls_raw)
+                if not letter:
                     continue
                 try:
-                    # NCEI format: YYMMDDHHMM HHMM HHMM CLASS ...
-                    parts = line.split()
-                    if len(parts) < 4:
-                        continue
-                    yymmddhhmm = parts[0]
-                    yr = int(yymmddhhmm[:2])
-                    yr4 = 2000 + yr if yr < 50 else 1900 + yr
-                    mo = int(yymmddhhmm[2:4])
-                    dy = int(yymmddhhmm[4:6])
-                    hh_start = int(yymmddhhmm[6:8])
-                    mm_start = int(yymmddhhmm[8:10])
-
-                    peak_str = parts[1] if len(parts) > 1 else "0000"
-                    hh_peak = int(peak_str[:2])
-                    mm_peak = int(peak_str[2:4])
-
-                    end_str = parts[2] if len(parts) > 2 else "0000"
-                    hh_end = int(end_str[:2])
-                    mm_end = int(end_str[2:4])
-
-                    cls_raw = parts[3] if len(parts) > 3 else ""
-                    letter, number = parse_goes_class(cls_raw)
-                    if not letter:
-                        continue
-
-                    start_ts = pd.Timestamp(yr4, mo, dy, hh_start, mm_start, tz="UTC")
-                    peak_ts  = pd.Timestamp(yr4, mo, dy, hh_peak,  mm_peak,  tz="UTC")
-                    end_ts   = pd.Timestamp(yr4, mo, dy, hh_end,   mm_end,   tz="UTC")
-
+                    def _ts(s: str) -> pd.Timestamp:
+                        return pd.Timestamp(s.replace("Z", "+00:00"))
+                    peak_ts  = _ts(ev["peakTime"])
+                    start_ts = _ts(ev.get("beginTime") or ev["peakTime"])
+                    end_ts   = _ts(ev.get("endTime")   or ev["peakTime"])
                     all_rows.append({
-                        "start_time": start_ts,
-                        "peak_time":  peak_ts,
-                        "end_time":   end_ts,
-                        "goes_class": cls_raw.upper(),
+                        "start_time":        start_ts,
+                        "peak_time":         peak_ts,
+                        "end_time":          end_ts,
+                        "goes_class":        cls_raw.upper(),
                         "goes_class_letter": letter,
                         "goes_class_number": number,
-                        "noaa_ar": "",
+                        "noaa_ar":           str(ev.get("activeRegionNum") or ""),
                     })
-                except (ValueError, IndexError):
+                except Exception:
                     continue
         except Exception as exc:
-            print(f"  Could not fetch {year}: {exc}")
+            print(f"  DONKI fetch failed ({chunk_start.date()}–{chunk_end.date()}): {exc}")
+
+        chunk_start = chunk_end + timedelta(days=1)
 
     df = pd.DataFrame(all_rows)
     if not df.empty:
-        start_ts = pd.Timestamp(start, tz="UTC")
-        end_ts   = pd.Timestamp(end,   tz="UTC")
-        df = df[(df["peak_time"] >= start_ts) & (df["peak_time"] <= end_ts)]
+        df = df.sort_values("peak_time").reset_index(drop=True)
+    return df
+
+
+# ── Fallback 2: NOAA SWPC event text files ────────────────────────────────────
+
+def _download_via_swpc(start: str, end: str) -> pd.DataFrame:
+    """
+    Download GOES flare list from NOAA SWPC monthly event files.
+    URL pattern: https://www.swpc.noaa.gov/pub/indices/events/YYYYMM_events.txt
+    """
+    import urllib.request
+    from calendar import monthrange
+
+    print("DONKI unavailable — trying NOAA SWPC monthly event files …")
+
+    start_dt = datetime.strptime(start[:10], "%Y-%m-%d")
+    end_dt   = datetime.strptime(end[:10],   "%Y-%m-%d")
+
+    all_rows: list[dict] = []
+    year, month = start_dt.year, start_dt.month
+
+    while (year, month) <= (end_dt.year, end_dt.month):
+        ym = f"{year}{month:02d}"
+        url = f"https://www.swpc.noaa.gov/pub/indices/events/{ym}_events.txt"
+        try:
+            print(f"  Fetching {ym} …")
+            req = urllib.request.Request(url, headers={"User-Agent": "ARUNA-Pipeline/2.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                text = resp.read().decode("latin-1")
+            for line in text.splitlines():
+                line = line.strip()
+                # SWPC event line format (fixed-width):
+                # date(YYMM)  start  max   end  obs  Q  type  loc  freq  class  ...
+                # Flare lines have "XRA" or "FLA" in the type column
+                if not line or line.startswith("#") or len(line) < 50:
+                    continue
+                if "XRA" not in line and "FLA" not in line:
+                    continue
+                try:
+                    parts = line.split()
+                    # Parts[0] = YYMM, parts[1] = start HHMM, parts[2] = max HHMM, parts[3] = end HHMM
+                    yymm   = parts[0]
+                    yr2    = int(yymm[:2])
+                    yr4    = 2000 + yr2 if yr2 < 50 else 1900 + yr2
+                    mo_str = int(yymm[2:4])
+                    # Day is the line's day field — SWPC includes it as the numeric date prefix
+                    # Actually SWPC format has date as YYYYMMDD in some versions; try parsing
+                    if len(parts[0]) == 8:  # YYYYMMDD
+                        yr4  = int(parts[0][:4])
+                        mo_str = int(parts[0][4:6])
+                        dy   = int(parts[0][6:8])
+                    else:
+                        # Fallback: use the month being fetched
+                        dy = 1
+                    hh_s, mm_s = int(parts[1][:2]), int(parts[1][2:4])
+                    hh_p, mm_p = int(parts[2][:2]), int(parts[2][2:4])
+                    hh_e, mm_e = int(parts[3][:2]), int(parts[3][2:4])
+                    # Find GOES class in parts — look for letter+number pattern
+                    cls_raw = ""
+                    for p in parts:
+                        l, n = parse_goes_class(p)
+                        if l:
+                            cls_raw = p
+                            break
+                    letter, number = parse_goes_class(cls_raw)
+                    if not letter:
+                        continue
+                    all_rows.append({
+                        "start_time":        pd.Timestamp(yr4, mo_str, dy, hh_s, mm_s, tz="UTC"),
+                        "peak_time":         pd.Timestamp(yr4, mo_str, dy, hh_p, mm_p, tz="UTC"),
+                        "end_time":          pd.Timestamp(yr4, mo_str, dy, hh_e, mm_e, tz="UTC"),
+                        "goes_class":        cls_raw.upper(),
+                        "goes_class_letter": letter,
+                        "goes_class_number": number,
+                        "noaa_ar":           "",
+                    })
+                except Exception:
+                    continue
+        except Exception as exc:
+            print(f"  Could not fetch {ym}: {exc}")
+
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+    df = pd.DataFrame(all_rows)
+    if not df.empty:
+        s = pd.Timestamp(start, tz="UTC")
+        e = pd.Timestamp(end,   tz="UTC")
+        df = df[(df["peak_time"] >= s) & (df["peak_time"] <= e)]
         df = df.sort_values("peak_time").reset_index(drop=True)
     return df
 
@@ -188,12 +263,21 @@ def download(start: str, end: str, out_path: str) -> None:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    # Try HEK first, fall back to NCEI CSV
+    # Try HEK → DONKI → SWPC in order
+    df = pd.DataFrame()
     try:
         df = _download_via_hek(start, end)
     except Exception as exc:
-        print(f"HEK query failed ({exc}) — trying NCEI fallback …")
-        df = _download_via_ncei(start, end)
+        print(f"HEK query failed ({exc}) — trying DONKI fallback …")
+
+    if df.empty:
+        try:
+            df = _download_via_donki(start, end)
+        except Exception as exc:
+            print(f"DONKI failed ({exc}) — trying SWPC fallback …")
+
+    if df.empty:
+        df = _download_via_swpc(start, end)
 
     if df.empty:
         print("ERROR: Could not retrieve any GOES events. Check network connectivity.")

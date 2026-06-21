@@ -23,7 +23,7 @@ dependencies:
     # pip install git+https://github.com/isro/solexsloods.git  (placeholder)
 
     # ── Spectral fitting ────────────────────────────────────────────────────────
-    - sherpa>=4.16
+    # - sherpa>=4.16
 
     # ── Machine learning ────────────────────────────────────────────────────────
     - torch>=2.2.0

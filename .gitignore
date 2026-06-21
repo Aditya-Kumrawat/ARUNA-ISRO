@@ -39,7 +39,7 @@ models/*.pt
 models/*.pkl
 models/*.index
 models/*.bin
-
+data/
 # ── Node.js ───────────────────────────────────────────────────────────────────
 node_modules/
 api/node_modules/

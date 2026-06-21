@@ -64,7 +64,9 @@ def _scan_dir(root: Path) -> dict[str, list[Path]]:
 
     date_map: dict[str, list[Path]] = defaultdict(list)
     for f in sorted(set(all_files)):
-        m = _DATE_RE.search(f.name)
+        # HEL1OS files may not include YYYYMMDD in the filename itself.
+        # Fall back to scanning the full path (which contains dated parent dirs).
+        m = _DATE_RE.search(f.name) or _DATE_RE.search(str(f))
         if m:
             date_map[m.group(1)].append(f)
     return dict(date_map)
@@ -86,6 +88,38 @@ def _pick_instrument(files: list[Path], keys: tuple[str, ...]) -> Optional[Path]
         if any(k in f.name.upper() for k in keys):
             return f
     return None
+
+
+def _pick_pradan_spectrum(files: list[Path], detector_keys: tuple[str, ...]) -> Optional[Path]:
+    """Pick a PRADAN spectrum file for a detector (PI preferred, then SPECTRA FITS)."""
+    for f in files:
+        name_up = f.name.upper()
+        if any(k in name_up for k in detector_keys) and ".PI." in name_up:
+            return f
+    for f in files:
+        name_up = f.name.upper()
+        if any(k in name_up for k in detector_keys) and "SPECTRA" in name_up:
+            return f
+    return None
+
+
+def _pick_companion_gti(files: list[Path], detector_keys: tuple[str, ...]) -> Optional[Path]:
+    """Pick GTI file for a detector when available."""
+    for f in files:
+        name_up = f.name.upper()
+        if ".GTI." in name_up and any(k in name_up for k in detector_keys):
+            return f
+    return None
+
+
+def _is_pradan_solexs(files: list[Path]) -> bool:
+    names = [f.name.lower() for f in files]
+    return any(".pi." in n for n in names) or any("solexs" in n and "sdd" in n for n in names)
+
+
+def _is_pradan_hel1os(files: list[Path]) -> bool:
+    names = [f.name.lower() for f in files]
+    return any("spectra" in n for n in names) or any(".pi." in n for n in names)
 
 
 # ── PhysicsFrame → dict (for Parquet serialisation) ───────────────────────────
@@ -145,11 +179,30 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
         engine = PhysicsEngine()
 
         # ── SoLEXS ────────────────────────────────────────────────────────────
+        solexs_list: list[FitsData] = []
         sol_primary = _pick_instrument(solexs_files, ("SLX", "SOLEXS", "SDD"))
         if sol_primary is None:
             return (date_str, 0, "No SoLEXS file found")
 
-        solexs_list: list[FitsData] = reader.read_solexs(sol_primary)
+        if _is_pradan_solexs(solexs_files):
+            for det in ("SDD1", "SDD2"):
+                det_keys = (det,)
+                pi_path = _pick_pradan_spectrum(solexs_files, det_keys)
+                if pi_path is None:
+                    continue
+                gti_path = _pick_companion_gti(solexs_files, det_keys)
+                solexs_list.extend(
+                    reader.read_solexs_pradan_pi(
+                        pi_path,
+                        gti_path=gti_path,
+                        detector=det,
+                        window_center_unix=None,
+                        window_sec=86400,
+                    )
+                )
+        else:
+            solexs_list = reader.read_solexs(sol_primary)
+
         if not solexs_list:
             return (date_str, 0, "FitsReader returned empty SoLEXS list")
 
@@ -166,11 +219,29 @@ def _process_day(args: tuple) -> tuple[str, int, str]:
             sol_data, sol_flags = dtc.select_solexs_detector(corr1, flags1, corr2, flags2)
 
         # ── HEL1OS ────────────────────────────────────────────────────────────
-        hel_primary = _pick_instrument(hel1os_files, ("HEL", "HXS", "HXMT"))
+        hel_primary = _pick_instrument(hel1os_files, ("HEL", "HXS", "HXMT", "CDTE", "CZT"))
         if hel_primary is None:
             return (date_str, 0, "No HEL1OS file found")
 
-        hel1os_list: list[FitsData] = reader.read_hel1os(hel_primary)
+        hel1os_list: list[FitsData] = []
+        if _is_pradan_hel1os(hel1os_files):
+            for det, keys in (("CDTE", ("CDTE",)), ("CZT", ("CZT",))):
+                spec_path = _pick_pradan_spectrum(hel1os_files, keys)
+                if spec_path is None:
+                    continue
+                gti_path = _pick_companion_gti(hel1os_files, keys)
+                hel1os_list.extend(
+                    reader.read_hel1os_pradan_pi(
+                        spec_path,
+                        gti_path=gti_path,
+                        detector=det,
+                        window_center_unix=None,
+                        window_sec=86400,
+                    )
+                )
+        else:
+            hel1os_list = reader.read_hel1os(hel_primary)
+
         if not hel1os_list:
             return (date_str, 0, "FitsReader returned empty HEL1OS list")
 

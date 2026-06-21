@@ -7,7 +7,7 @@ scipy>=1.11
 astropy>=6.0
 sunpy>=5.1
 sunkit-spex>=0.4
-sherpa>=4.16
+# sherpa>=4.16
 
 # ── Machine learning ─────────────────────────────────────────────────────────
 torch>=2.2

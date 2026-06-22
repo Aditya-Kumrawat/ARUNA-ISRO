@@ -72,6 +72,15 @@ class SolarFlareDataset:
         import torch
         self._torch = torch
         self._df = pd.read_parquet(parquet_path)
+        if (scaler is not None
+                and hasattr(scaler, "n_features_in_")
+                and scaler.n_features_in_ != N_FEATURES_BASE):
+            logger.warning(
+                "Scaler expects %d features but dataset has %d — scaler disabled. "
+                "Rebuild the scaler with build_dataset.py.",
+                scaler.n_features_in_, N_FEATURES_BASE,
+            )
+            scaler = None
         self._scaler = scaler
 
     def __len__(self) -> int:

@@ -153,7 +153,7 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
 
         with torch.no_grad():
             logits = model(bt, bn, bs)
-            probs  = torch.softmax(logits, dim=1).numpy()
+            probs  = torch.softmax(logits, dim=1).cpu().numpy()
         all_probs.append(probs)
 
         done = min(batch_start + BATCH_SIZE, N)

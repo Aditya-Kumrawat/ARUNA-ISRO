@@ -1,66 +1,58 @@
 """
-resplit_by_event.py — Event-level train/val/test split.
+resplit_by_event.py — Fast event-level train/val/test split (70/15/15).
 
-Groups consecutive non-QUIET windows into flare events, then splits
-events temporally (70/15/15) so no event straddles two splits and
-each split gets a proportional share of M and X events.
-
-QUIET windows are assigned to whichever split owns the nearest flare
-event. This preserves temporal ordering and prevents leakage.
-
-Output: overwrites data/dataset/train.parquet, val.parquet, test.parquet
+Loads only label + window_end columns for split logic, then filters
+the full parquets by index to avoid loading all byte arrays twice.
 """
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-DATA_DIR = Path("data/dataset")
+DATA_DIR   = Path("data/dataset")
 CLASS_NAMES = {0: "QUIET", 1: "B", 2: "C", 3: "M", 4: "X"}
-
-TRAIN_FRAC = 0.70
-VAL_FRAC   = 0.15
-# TEST_FRAC  = 0.15 (remainder)
-
-# Gap between windows that signals a new event (minutes)
+TRAIN_FRAC  = 0.70
+VAL_FRAC    = 0.15
 EVENT_GAP_MINUTES = 30
 
-# ── Load all data ─────────────────────────────────────────────────────────────
+# ── 1. Load only lightweight columns ─────────────────────────────────────────
 
-print("Loading all splits ...")
-dfs = []
+print("Loading label + window_end columns from all splits ...")
+light_dfs = []
+full_paths = {}
+
 for split in ("train", "val", "test"):
     p = DATA_DIR / f"{split}.parquet"
-    if p.exists():
-        df = pd.read_parquet(p)
-        dfs.append(df)
-        print(f"  {split}: {len(df)} rows")
+    if not p.exists():
+        print(f"  MISSING: {p}")
+        continue
+    df = pd.read_parquet(p, columns=["label", "window_end"])
+    df["_source"] = split
+    df["_source_idx"] = np.arange(len(df))
+    light_dfs.append(df)
+    full_paths[split] = p
+    print(f"  {split}: {len(df)} rows")
 
-all_df = pd.concat(dfs, ignore_index=True)
-all_df["window_end_ts"] = pd.to_datetime(all_df["window_end"], utc=True)
-all_df = all_df.sort_values("window_end_ts").reset_index(drop=True)
-print(f"Total: {len(all_df)} rows spanning "
-      f"{all_df['window_end_ts'].min()} to {all_df['window_end_ts'].max()}")
+meta = pd.concat(light_dfs, ignore_index=True)
+meta["window_end_ts"] = pd.to_datetime(meta["window_end"], utc=True)
+meta = meta.sort_values("window_end_ts").reset_index(drop=True)
+print(f"Total: {len(meta)} rows")
 
-# ── Identify flare events ─────────────────────────────────────────────────────
+# ── 2. Detect flare events ────────────────────────────────────────────────────
 
-flare_mask = all_df["label"] > 0   # any non-QUIET window
-flare_df   = all_df[flare_mask].copy()
+flare_mask = meta["label"] > 0
+flare_meta = meta[flare_mask].copy()
 
-# Assign event IDs: new event when gap > EVENT_GAP_MINUTES
-dt = flare_df["window_end_ts"].diff()
+dt       = flare_meta["window_end_ts"].diff()
 new_event = (dt > pd.Timedelta(minutes=EVENT_GAP_MINUTES)) | dt.isna()
-flare_df["event_id"] = new_event.cumsum()
+flare_meta["event_id"] = new_event.cumsum().astype(int)
 
-# Summarise events
 events = (
-    flare_df.groupby("event_id")
-    .agg(
-        start=("window_end_ts", "min"),
-        end=("window_end_ts", "max"),
-        n_windows=("label", "count"),
-        peak_class=("label", "max"),
-    )
+    flare_meta.groupby("event_id")
+    .agg(start=("window_end_ts","min"),
+         end=("window_end_ts","max"),
+         n_windows=("label","count"),
+         peak_class=("label","max"))
     .reset_index()
     .sort_values("start")
     .reset_index(drop=True)
@@ -68,110 +60,81 @@ events = (
 
 print(f"\nFlare events detected: {len(events)}")
 for cls in range(1, 5):
-    n = (events["peak_class"] == cls).sum()
-    print(f"  {CLASS_NAMES[cls]}-class events: {n}")
+    print(f"  {CLASS_NAMES[cls]}: {(events['peak_class']==cls).sum()} events")
 
-# ── Split events temporally (preserve chronological order) ───────────────────
+# ── 3. Split events temporally ───────────────────────────────────────────────
 
-n_events   = len(events)
-n_train    = int(np.floor(n_events * TRAIN_FRAC))
-n_val      = int(np.floor(n_events * VAL_FRAC))
+n = len(events)
+n_train = int(np.floor(n * TRAIN_FRAC))
+n_val   = int(np.floor(n * VAL_FRAC))
 
-train_event_ids = set(events.iloc[:n_train]["event_id"])
-val_event_ids   = set(events.iloc[n_train:n_train + n_val]["event_id"])
-test_event_ids  = set(events.iloc[n_train + n_val:]["event_id"])
+train_ids = set(events.iloc[:n_train]["event_id"])
+val_ids   = set(events.iloc[n_train:n_train+n_val]["event_id"])
+test_ids  = set(events.iloc[n_train+n_val:]["event_id"])
 
-print(f"\nEvent split: train={len(train_event_ids)}  "
-      f"val={len(val_event_ids)}  test={len(test_event_ids)}")
+print(f"\nEvent split: train={len(train_ids)}  val={len(val_ids)}  test={len(test_ids)}")
 
-# ── Assign flare windows to splits ───────────────────────────────────────────
+# ── 4. Assign split to every row ─────────────────────────────────────────────
 
-flare_df["split"] = flare_df["event_id"].map(
-    lambda eid: "train" if eid in train_event_ids
-    else ("val" if eid in val_event_ids else "test")
-)
+# Flare windows: follow their event
+eid_map  = flare_meta.set_index(flare_meta.index)["event_id"]
+def flare_split(eid):
+    return "train" if eid in train_ids else ("val" if eid in val_ids else "test")
 
-# ── Assign QUIET windows to the nearest split boundary ───────────────────────
+flare_meta["split"] = flare_meta["event_id"].map(flare_split)
+meta.loc[flare_mask, "split"] = flare_meta["split"].values
 
-# Build a timeline: for each flare event record its split and time range
-event_split = events.copy()
-event_split["split"] = event_split["event_id"].map(
-    lambda eid: "train" if eid in train_event_ids
-    else ("val" if eid in val_event_ids else "test")
-)
+# QUIET windows: assign by temporal boundary
+train_end_ts = events.iloc[n_train - 1]["end"]   if n_train > 0          else meta["window_end_ts"].min()
+val_end_ts   = events.iloc[n_train + n_val - 1]["end"] if n_val > 0 else train_end_ts
 
-quiet_df   = all_df[~flare_mask].copy()
+quiet_mask = ~flare_mask
+meta.loc[quiet_mask & (meta["window_end_ts"] <= train_end_ts), "split"] = "train"
+meta.loc[quiet_mask & (meta["window_end_ts"] >  train_end_ts) &
+         (meta["window_end_ts"] <= val_end_ts), "split"] = "val"
+meta.loc[quiet_mask & (meta["window_end_ts"] >  val_end_ts), "split"] = "test"
 
-# For each QUIET window, assign split based on its timestamp relative to events
-# Strategy: assign to the split that owns the temporally closest flare event
-train_events = event_split[event_split["split"] == "train"]
-val_events   = event_split[event_split["split"] == "val"]
-test_events  = event_split[event_split["split"] == "test"]
-
-def nearest_split(ts):
-    def min_dist(edf):
-        if edf.empty:
-            return float("inf")
-        return min(
-            abs((ts - edf["start"]).dt.total_seconds().abs().min()),
-            abs((ts - edf["end"]).dt.total_seconds().abs().min()),
-        )
-    d_train = min_dist(train_events)
-    d_val   = min_dist(val_events)
-    d_test  = min_dist(test_events)
-    best = min(d_train, d_val, d_test)
-    if best == d_train:
-        return "train"
-    if best == d_val:
-        return "val"
-    return "test"
-
-print("\nAssigning QUIET windows to splits (may take a minute) ...")
-# Vectorised approximation: use the split boundary timestamps
-# Train events end at events.iloc[n_train-1]["end"]
-# Val events end at events.iloc[n_train+n_val-1]["end"]
-if not train_events.empty and not val_events.empty and not test_events.empty:
-    train_end_ts = train_events["end"].max()
-    val_end_ts   = val_events["end"].max()
-
-    def fast_split(ts):
-        if ts <= train_end_ts:
-            return "train"
-        if ts <= val_end_ts:
-            return "val"
-        return "test"
-
-    quiet_df["split"] = quiet_df["window_end_ts"].apply(fast_split)
-else:
-    # Fallback: assign all QUIET to train
-    quiet_df["split"] = "train"
-
-print(f"  QUIET distribution: "
-      f"train={( quiet_df['split']=='train').sum()}  "
-      f"val={( quiet_df['split']=='val').sum()}  "
-      f"test={( quiet_df['split']=='test').sum()}")
-
-# ── Combine and save ──────────────────────────────────────────────────────────
-
-combined = pd.concat([
-    flare_df[all_df.columns.tolist() + ["split"]],
-    quiet_df[all_df.columns.tolist() + ["split"]],
-], ignore_index=True).sort_values("window_end_ts")
+# ── 5. Print distributions ────────────────────────────────────────────────────
 
 print("\nFinal distributions:")
 for split_name in ("train", "val", "test"):
-    sub = combined[combined["split"] == split_name]
+    sub = meta[meta["split"] == split_name]
     print(f"\n{split_name.upper()} ({len(sub)} windows):")
     for lbl, name in CLASS_NAMES.items():
-        n = (sub["label"] == lbl).sum()
-        pct = 100 * n / len(sub) if len(sub) > 0 else 0
-        print(f"  {name}: {n:>6}  ({pct:.1f}%)")
+        n_cls = (sub["label"] == lbl).sum()
+        print(f"  {name}: {n_cls:>6}")
 
-drop_cols = ["window_end_ts", "split"]
-for split_name in ("train", "val", "test"):
-    sub = combined[combined["split"] == split_name].drop(columns=drop_cols)
-    out = DATA_DIR / f"{split_name}.parquet"
-    sub.to_parquet(out, index=False)
-    print(f"\nSaved {len(sub)} {split_name} windows -> {out}")
+# ── 6. Save: reload full parquets, filter by assigned indices, write ──────────
+
+print("\nSaving new splits (reloading full data) ...")
+
+# Build a lookup: (source_split, source_idx) -> new_split
+meta["_key"] = meta["_source"] + "_" + meta["_source_idx"].astype(str)
+key_to_split = dict(zip(meta["_key"], meta["split"]))
+
+for src_split, src_path in full_paths.items():
+    print(f"  Processing {src_split}.parquet ...")
+    full_df = pd.read_parquet(src_path)
+    full_df["_key"] = src_split + "_" + np.arange(len(full_df)).astype(str)
+    full_df["split"] = full_df["_key"].map(key_to_split)
+
+    for new_split in ("train", "val", "test"):
+        subset = full_df[full_df["split"] == new_split].drop(columns=["_key", "split"])
+        # Accumulate — we write after processing all source files
+        out_path = DATA_DIR / f"_tmp_{new_split}_{src_split}.parquet"
+        subset.to_parquet(out_path, index=False)
+
+print("  Merging ...")
+for new_split in ("train", "val", "test"):
+    parts = []
+    for src_split in full_paths:
+        tmp = DATA_DIR / f"_tmp_{new_split}_{src_split}.parquet"
+        if tmp.exists():
+            parts.append(pd.read_parquet(tmp))
+            tmp.unlink()
+    merged = pd.concat(parts, ignore_index=True)
+    out = DATA_DIR / f"{new_split}.parquet"
+    merged.to_parquet(out, index=False)
+    print(f"  Saved {len(merged)} rows -> {out}")
 
 print("\nDone. Next: python python/scripts/rebalance_dataset.py")

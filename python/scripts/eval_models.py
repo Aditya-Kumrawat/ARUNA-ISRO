@@ -109,8 +109,9 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
     ckpt  = torch.load(str(weights_path), map_location=device)
     state = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(state)
+    model.to(device)
     model.eval()
-    logger.info("TCN loaded from %s", weights_path)
+    logger.info("TCN loaded from %s on %s", weights_path, device)
 
     use_scaler = scaler is not None and getattr(scaler, 'n_features_in_', N_FEATURES_BASE) == N_FEATURES_BASE
 

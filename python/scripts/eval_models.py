@@ -212,16 +212,18 @@ def run_xgb(df: pd.DataFrame) -> np.ndarray | None:
 # ── Report ────────────────────────────────────────────────────────────────────
 
 def _best_threshold(probs: np.ndarray, labels: np.ndarray) -> tuple[float, float]:
+    """Search threshold 0.01–0.99 to maximise TSS on the given split."""
     best_tss, best_t = -1.0, 0.5
-    for t in np.arange(0.02, 0.51, 0.02):
-        tss_val, *_ = _tss(probs, labels, threshold=t)
+    for t in np.arange(0.01, 1.00, 0.01):
+        tss_val, *_ = _tss(probs, labels, threshold=float(t))
         if tss_val > best_tss:
             best_tss, best_t = tss_val, float(t)
     return best_t, best_tss
 
 
-def _report(name: str, probs: np.ndarray, labels: np.ndarray) -> None:
-    best_t, best_tss = _best_threshold(probs, labels)
+def _report(name: str, probs: np.ndarray, labels: np.ndarray,
+            saved_threshold: float | None = None) -> None:
+    best_t, _    = _best_threshold(probs, labels)
     tss_val, tp, fn, fp, tn = _tss(probs, labels, threshold=best_t)
     ece_val = _ece(probs, labels)
     preds   = probs.argmax(axis=1)
@@ -231,10 +233,17 @@ def _report(name: str, probs: np.ndarray, labels: np.ndarray) -> None:
     print(f"\n{'='*55}")
     print(f"  {name}")
     print(f"{'='*55}")
-    print(f"  TSS (M+X)   : {tss_val:+.4f}   (target > 0.60)  [threshold={best_t:.2f}]")
+    print(f"  TSS (M+X)   : {tss_val:+.4f}   (target > 0.60)  [threshold={best_t:.2f}, grid-search on test]")
     print(f"  ECE         : {ece_val:.4f}    (target < 0.05)")
     print(f"  Accuracy    : {acc:.4f}")
     print(f"  Confusion (M+X binary): TP={tp}  FN={fn}  FP={fp}  TN={tn}")
+
+    # Also report at the operationally saved threshold (tuned on train flares)
+    if saved_threshold is not None:
+        s_tss, s_tp, s_fn, s_fp, s_tn = _tss(probs, labels, threshold=saved_threshold)
+        print(f"\n  At saved threshold={saved_threshold:.2f} (tuned on train flares):")
+        print(f"    TSS={s_tss:+.4f}  TP={s_tp}  FN={s_fn}  FP={s_fp}  TN={s_tn}")
+
     print(f"\n  Per-class recall:")
     for cls, val in recall.items():
         if val is None:
@@ -242,7 +251,6 @@ def _report(name: str, probs: np.ndarray, labels: np.ndarray) -> None:
         else:
             print(f"    {cls:8s}: {val:.3f}")
 
-    # Class distribution in test set
     print(f"\n  Label distribution: ", end="")
     for c, name_c in enumerate(_CLASS_NAMES):
         n = (labels == c).sum()
@@ -272,9 +280,15 @@ def main() -> None:
 
     logger.info("%s split: %d samples", args.split, len(df))
 
+    # Load saved threshold (tuned on training flares during train_tcn.py)
+    th_path = _MODELS_DIR / "tcn_v1.threshold.npy"
+    saved_threshold = float(np.load(str(th_path))[0]) if th_path.exists() else None
+    if saved_threshold is not None:
+        logger.info("Saved operational threshold: %.2f", saved_threshold)
+
     # TCN
     tcn_probs = run_tcn(df)
-    _report("DualStreamTCN", tcn_probs, labels)
+    _report("DualStreamTCN", tcn_probs, labels, saved_threshold)
 
     # XGBoost
     xgb_probs = run_xgb(df)
@@ -285,7 +299,7 @@ def main() -> None:
         w_tcn = args.tcn_weight
         w_xgb = args.xgb_weight
         ens_probs = w_tcn * tcn_probs + w_xgb * xgb_probs
-        _report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})", ens_probs, labels)
+        _report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})", ens_probs, labels, saved_threshold)
 
     print("\nDone.")
 

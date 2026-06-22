@@ -426,54 +426,65 @@ def train(
         logger.warning("MAPIE calibration skipped: %s", exc)
         logger.warning("TCN weights are still saved. Run 'pip install mapie scikit-learn' and re-run to add calibration.")
 
-    # ── Threshold optimisation (val is all-QUIET, so use train flares) ─────────
-    logger.info("Optimising M+X decision threshold on training flare windows ...")
+    # ── Threshold optimisation ─────────────────────────────────────────────────
+    # Principled operating point: tune the M+X decision threshold on the FULL
+    # validation set (QUIET + flares) so the chosen threshold reflects the real
+    # false-positive cost.  This is leak-free for the test set.  Only if val has
+    # no flares (legacy splits) do we fall back to training flare windows, which
+    # ignores false positives and is therefore optimistic.
     try:
         model.load_state_dict(torch.load(tcn_out, map_location=device))
         model.eval()
 
-        # Collect all training predictions; then search threshold on flare slice.
-        # Using training data for threshold search is a mild form of optimism, but
-        # it's the only option when val has no flares.  The test set is never touched.
-        train_probs_list: list[np.ndarray] = []
-        train_labels_list: list[int] = []
+        if val_has_flares:
+            logger.info("Optimising M+X threshold on FULL validation set (QUIET + flares) ...")
+            th_source_ds = val_ds
+            use_full = True
+        else:
+            logger.info("Val has no flares — falling back to training flare windows (optimistic) ...")
+            th_source_ds = train_ds
+            use_full = False
 
+        probs_list: list[np.ndarray] = []
+        labels_list: list[int] = []
         with torch.no_grad():
             for x_th, x_nth, x_sh, _, hard_labels in DataLoader(
-                train_ds, batch_size=batch_size, shuffle=False
+                th_source_ds, batch_size=batch_size, shuffle=False
             ):
                 logits = model(x_th.to(device), x_nth.to(device), x_sh.to(device))
                 probs  = torch.softmax(logits, dim=1).cpu().numpy()
-                train_probs_list.append(probs)
-                train_labels_list.extend(hard_labels.tolist())
+                probs_list.append(probs)
+                labels_list.extend(hard_labels.tolist())
 
-        train_probs_np  = np.concatenate(train_probs_list, axis=0)
-        train_labels_np = np.array(train_labels_list)
+        th_probs_all  = np.concatenate(probs_list, axis=0)
+        th_labels_all = np.array(labels_list)
 
-        # Only use flare windows for threshold tuning (QUIET windows always
-        # pull the optimal threshold toward 1.0, defeating the purpose).
-        flare_mask  = train_labels_np >= 2   # C, M, X
-        th_probs    = train_probs_np[flare_mask]
-        th_labels   = train_labels_np[flare_mask]
+        if use_full:
+            # Full val set: search whole range, false positives are accounted for.
+            th_probs, th_labels = th_probs_all, th_labels_all
+            search_lo, search_hi = 0.01, 1.00
+        else:
+            # Flare-only slice: QUIET would pull threshold toward 1.0, so exclude.
+            flare_mask = th_labels_all >= 2
+            th_probs, th_labels = th_probs_all[flare_mask], th_labels_all[flare_mask]
+            search_lo, search_hi = 0.05, 0.95
 
         if len(th_probs) > 0:
             best_th, best_th_tss = 0.5, -999.0
-            for th in np.arange(0.05, 0.95, 0.01):
+            for th in np.arange(search_lo, search_hi, 0.01):
                 tss = _compute_tss(th_probs, th_labels, threshold=float(th))
                 if tss > best_th_tss:
                     best_th_tss = tss
                     best_th = float(th)
 
-            logger.info(
-                "Optimal M+X threshold (on train flares): %.2f  →  TSS=%.4f",
-                best_th, best_th_tss,
-            )
-            # Persist threshold alongside the checkpoint so inference can load it.
+            src = "full val set" if use_full else "train flares (optimistic)"
+            logger.info("Optimal M+X threshold (on %s): %.2f  ->  TSS=%.4f",
+                        src, best_th, best_th_tss)
             th_path = Path(tcn_out).with_suffix(".threshold.npy")
             np.save(str(th_path), np.array([best_th]))
             logger.info("Threshold saved -> %s", th_path)
         else:
-            logger.warning("No flare windows found in training set — threshold not saved.")
+            logger.warning("No windows available for threshold tuning — not saved.")
             best_th = 0.5
 
     except Exception as exc:

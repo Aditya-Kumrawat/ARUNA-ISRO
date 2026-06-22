@@ -95,14 +95,16 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
         sys.exit(1)
 
     scaler = None
-    scaler_path = _MODELS_DIR / "feature_scaler.pkl"
-    if scaler_path.exists():
-        with open(scaler_path, "rb") as fh:
-            scaler = pickle.load(fh)
-        logger.info("Loaded feature scaler (n_features_in_=%s)",
-                    getattr(scaler, 'n_features_in_', '?'))
+    for _sp in ["feature_scaler_19.pkl", "feature_scaler.pkl"]:
+        scaler_path = _MODELS_DIR / _sp
+        if scaler_path.exists():
+            with open(scaler_path, "rb") as fh:
+                scaler = pickle.load(fh)
+            logger.info("Loaded feature scaler %s (n_features_in_=%s)",
+                        _sp, getattr(scaler, 'n_features_in_', '?'))
+            break
 
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DualStreamTCN()
     ckpt  = torch.load(str(weights_path), map_location=device)
     state = ckpt.get("model_state_dict", ckpt)
@@ -144,9 +146,9 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
     for batch_start in range(0, N, BATCH_SIZE):
         batch = df.iloc[batch_start: batch_start + BATCH_SIZE].itertuples(index=False)
         prepared = [_prepare_sample(r) for r in batch]
-        bt = torch.tensor(np.stack([p[0] for p in prepared]), dtype=torch.float32)
-        bn = torch.tensor(np.stack([p[1] for p in prepared]), dtype=torch.float32)
-        bs = torch.tensor(np.stack([p[2] for p in prepared]), dtype=torch.float32)
+        bt = torch.tensor(np.stack([p[0] for p in prepared]), dtype=torch.float32).to(device)
+        bn = torch.tensor(np.stack([p[1] for p in prepared]), dtype=torch.float32).to(device)
+        bs = torch.tensor(np.stack([p[2] for p in prepared]), dtype=torch.float32).to(device)
 
         with torch.no_grad():
             logits = model(bt, bn, bs)

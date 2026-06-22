@@ -6,7 +6,16 @@ Never hardcode values in module files.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Tuple
+
+# models.py lives at python/aruna/l4_forecasting/models.py → project root is 4 levels up
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _model_path(filename: str) -> str:
+    """Resolve a model filename relative to the project root, not CWD."""
+    return str(_PROJECT_ROOT / "models" / filename)
 
 
 FORECAST_HORIZONS: Tuple[int, ...] = (5, 10, 15, 30, 60)  # minutes
@@ -48,10 +57,27 @@ class ForecastConfig:
     mapie_coverage: float = 0.90           # 90% conformal coverage guarantee
     mapie_alpha: float = 0.10              # 1 - coverage
 
-    # ── Model paths ───────────────────────────────────────────────────────────
-    tcn_weights_path: str = "models/tcn_v1.pt"
-    mapie_calibration_path: str = "models/mapie_calibration.pkl"
-    feature_scaler_path: str = "models/feature_scaler.pkl"
+    # ── Rare-event handling (post-hoc, no retraining) ─────────────────────────
+    # Prior correction (logit adjustment, Menon et al. 2020): redistributes
+    # probability mass toward rare classes by dividing by the class prior^tau.
+    # Counters the model's learned QUIET base-rate bias on imbalanced data.
+    enable_prior_correction: bool = True
+    # Training-split class frequencies [QUIET, B, C, M, X] (~74k windows, SC25 max)
+    class_priors: Tuple[float, ...] = field(
+        default_factory=lambda: (0.907, 0.001, 0.027, 0.058, 0.0074)
+    )
+    prior_correction_tau: float = 0.5      # 0=off, 1=full inverse-frequency
+
+    # Physics blend: weighted mix of physics heuristic with the (corrected) ML
+    # ensemble. The physics signal (HOPE/DNI/SHEI/T) is the reliable backbone for
+    # physically-obvious events like X6.3; ML adds data-driven nuance.
+    enable_physics_blend: bool = True
+    physics_blend_weight: float = 0.65     # weight on physics heuristic (0..1)
+
+    # ── Model paths (absolute, resolved from project root) ───────────────────
+    tcn_weights_path: str = field(default_factory=lambda: _model_path("tcn_v1.pt"))
+    mapie_calibration_path: str = field(default_factory=lambda: _model_path("mapie_calibration.pkl"))
+    feature_scaler_path: str = field(default_factory=lambda: _model_path("feature_scaler.pkl"))
 
     # ── Temporal split (STRICT — no random shuffling) ─────────────────────────
     train_start: str = "2023-09-02"

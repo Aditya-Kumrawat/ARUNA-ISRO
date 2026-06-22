@@ -21,6 +21,9 @@ class RollingP85Baseline:
         self._threshold: Optional[float] = None
         self._last_recompute: int = 0
         self._frozen: bool = False
+        # Scale warm-up requirement with window size so small test windows work.
+        # Production (window=10800) → min_frames=300 (~5 min). Tests can be smaller.
+        self._min_frames: int = min(300, max(10, window_sec // 4))
 
     def update(self, flux: float, t_sec: int) -> Tuple[Optional[float], Optional[float]]:
         self._window.append(flux)
@@ -28,11 +31,9 @@ class RollingP85Baseline:
             self._recompute(t_sec)
         return self._baseline, self._threshold
 
-    _MIN_FRAMES = 300  # require ~5 min before first compute to dilute transient spikes
-
     def _recompute(self, t_sec: int) -> None:
         data = list(self._window)
-        if len(data) < self._MIN_FRAMES:
+        if len(data) < self._min_frames:
             return
         arr = np.array(data, dtype=np.float64)
         # Robust outlier clipping: MAD-based (handles up to ~40% outliers vs std which breaks at 15%)

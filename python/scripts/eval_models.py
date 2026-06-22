@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+eval_models.py — Evaluate TCN + XGBoost on the held-out test split.
+
+Usage (from project root):
+    python python/scripts/eval_models.py --dataset-dir data/dataset/
+
+Outputs per-class metrics, TSS, ECE, and accuracy for both models
+and the weighted ensemble.
+"""
+from __future__ import annotations
+
+import logging
+import pickle
+import sys
+from pathlib import Path
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+)
+logger = logging.getLogger("eval_models")
+
+SEQUENCE_LENGTH  = 600
+N_FEATURES_BASE  = 19
+_CLASS_NAMES     = ["QUIET", "B", "C", "M", "X"]
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_MODELS_DIR   = _PROJECT_ROOT / "models"
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _tss(probs: np.ndarray, labels: np.ndarray, threshold: float = 0.5) -> float:
+    pred_active = (probs[:, 3] + probs[:, 4]) >= threshold
+    true_active = labels >= 3
+    tp = (pred_active &  true_active).sum()
+    fn = (~pred_active & true_active).sum()
+    fp = (pred_active & ~true_active).sum()
+    tn = (~pred_active & ~true_active).sum()
+    pod  = tp / max(tp + fn, 1)
+    pofd = fp / max(fp + tn, 1)
+    return float(pod - pofd), int(tp), int(fn), int(fp), int(tn)
+
+
+def _ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
+    conf  = probs.max(axis=1)
+    preds = probs.argmax(axis=1)
+    correct = (preds == labels).astype(float)
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece  = 0.0
+    for i in range(n_bins):
+        mask = (conf > bins[i]) & (conf <= bins[i + 1])
+        if mask.sum() == 0:
+            continue
+        ece += mask.sum() / len(labels) * abs(conf[mask].mean() - correct[mask].mean())
+    return float(ece)
+
+
+def _per_class_recall(preds: np.ndarray, labels: np.ndarray) -> dict:
+    out = {}
+    for c, name in enumerate(_CLASS_NAMES):
+        mask = labels == c
+        if mask.sum() == 0:
+            out[name] = None
+        else:
+            out[name] = (preds[mask] == c).mean()
+    return out
+
+
+# ── TCN inference ─────────────────────────────────────────────────────────────
+
+def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
+    """Returns (N, 5) probability matrix from TCN."""
+    try:
+        import torch
+    except ImportError:
+        logger.error("PyTorch not installed.")
+        sys.exit(1)
+
+    from aruna.l4_forecasting.tcn_model import DualStreamTCN
+    from torch.utils.data import DataLoader, TensorDataset
+
+    weights_path = _MODELS_DIR / "tcn_v1.pt"
+    if not weights_path.exists():
+        logger.error("TCN weights not found at %s", weights_path)
+        sys.exit(1)
+
+    scaler = None
+    scaler_path = _MODELS_DIR / "feature_scaler.pkl"
+    if scaler_path.exists():
+        with open(scaler_path, "rb") as fh:
+            scaler = pickle.load(fh)
+        logger.info("Loaded feature scaler (n_features_in_=%s)",
+                    getattr(scaler, 'n_features_in_', '?'))
+
+    device = torch.device("cpu")
+    model = DualStreamTCN()
+    ckpt  = torch.load(str(weights_path), map_location=device)
+    state = ckpt.get("model_state_dict", ckpt)
+    model.load_state_dict(state)
+    model.eval()
+    logger.info("TCN loaded from %s", weights_path)
+
+    use_scaler = scaler is not None and getattr(scaler, 'n_features_in_', N_FEATURES_BASE) == N_FEATURES_BASE
+
+    def _prepare_sample(row):
+        feats = np.frombuffer(row.features_bytes, dtype=np.float32).copy()
+        feats = feats.reshape(SEQUENCE_LENGTH, N_FEATURES_BASE)
+        phases_int = np.frombuffer(row.phases_bytes, dtype=np.uint8)
+
+        if use_scaler:
+            feats = scaler.transform(feats).astype(np.float32)
+
+        phase_onehot = np.zeros((SEQUENCE_LENGTH, 5), dtype=np.float32)
+        for t in range(min(SEQUENCE_LENGTH, len(phases_int))):
+            idx_p = int(phases_int[t])
+            if 0 <= idx_p <= 4:
+                phase_onehot[t, idx_p] = 1.0
+
+        thermal_base = feats[:, :8]
+        tnci_col     = np.zeros((SEQUENCE_LENGTH, 1), dtype=np.float32)
+        x_thermal    = np.concatenate([thermal_base, tnci_col], axis=1)
+        x_nonthermal = feats[:, 8:16]
+        shared_base  = feats[:, 16:19]
+        suit_zeros   = np.zeros((SEQUENCE_LENGTH, 2), dtype=np.float32)
+        x_shared     = np.concatenate([shared_base, suit_zeros, phase_onehot], axis=1)
+        return x_thermal, x_nonthermal, x_shared
+
+    BATCH_SIZE = 64
+    N = len(df)
+    all_probs = []
+
+    logger.info("Running TCN inference on %d samples (batch=%d) ...", N, BATCH_SIZE)
+
+    for batch_start in range(0, N, BATCH_SIZE):
+        batch = df.iloc[batch_start: batch_start + BATCH_SIZE].itertuples(index=False)
+        prepared = [_prepare_sample(r) for r in batch]
+        bt = torch.tensor(np.stack([p[0] for p in prepared]), dtype=torch.float32)
+        bn = torch.tensor(np.stack([p[1] for p in prepared]), dtype=torch.float32)
+        bs = torch.tensor(np.stack([p[2] for p in prepared]), dtype=torch.float32)
+
+        with torch.no_grad():
+            logits = model(bt, bn, bs)
+            probs  = torch.softmax(logits, dim=1).numpy()
+        all_probs.append(probs)
+
+        done = min(batch_start + BATCH_SIZE, N)
+        if done % 5000 < BATCH_SIZE or done == N:
+            logger.info("  TCN: %d / %d", done, N)
+
+    return np.concatenate(all_probs, axis=0).astype(np.float32)
+
+
+# ── XGBoost inference ─────────────────────────────────────────────────────────
+
+def run_xgb(df: pd.DataFrame) -> np.ndarray | None:
+    """Returns (N, 5) probability matrix from XGBoost, or None if unavailable."""
+    try:
+        import xgboost as xgb
+    except ImportError:
+        logger.warning("XGBoost not installed — skipping XGB evaluation.")
+        return None
+
+    from aruna.l4_forecasting.xgb_model import XGBoostForecaster, extract_statistical_features
+
+    xgb_path = _MODELS_DIR / "xgb_v1.json"
+    if not xgb_path.exists():
+        logger.warning("XGBoost weights not found at %s — skipping.", xgb_path)
+        return None
+
+    forecaster = XGBoostForecaster(str(xgb_path))
+    if not forecaster.available:
+        logger.warning("XGBoostForecaster failed to load — skipping.")
+        return None
+
+    logger.info("XGBoost loaded (classes=%s)", forecaster._present_classes.tolist())
+    present_classes = forecaster._present_classes
+
+    logger.info("Building XGBoost feature matrix for %d samples ...", len(df))
+    feat_rows = []
+    for i, row in enumerate(df.itertuples(index=False)):
+        feats  = np.frombuffer(row.features_bytes, dtype=np.float32).copy()
+        feats  = feats.reshape(SEQUENCE_LENGTH, N_FEATURES_BASE)
+        phases = np.frombuffer(row.phases_bytes, dtype=np.uint8)
+        feat_rows.append(extract_statistical_features(feats, phases))
+        if (i + 1) % 10000 == 0:
+            logger.info("  XGB features: %d / %d", i + 1, len(df))
+
+    X_all = np.vstack(feat_rows).astype(np.float32)
+    logger.info("Running XGBoost batch predict_proba ...")
+    proba_enc = forecaster._model.predict_proba(X_all).astype(np.float32)
+
+    all_probs = np.zeros((len(df), 5), dtype=np.float32)
+    for enc_idx, orig_label in enumerate(present_classes):
+        all_probs[:, orig_label] = proba_enc[:, enc_idx]
+
+    return all_probs
+
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+def _best_threshold(probs: np.ndarray, labels: np.ndarray) -> tuple[float, float]:
+    best_tss, best_t = -1.0, 0.5
+    for t in np.arange(0.02, 0.51, 0.02):
+        tss_val, *_ = _tss(probs, labels, threshold=t)
+        if tss_val > best_tss:
+            best_tss, best_t = tss_val, float(t)
+    return best_t, best_tss
+
+
+def _report(name: str, probs: np.ndarray, labels: np.ndarray) -> None:
+    best_t, best_tss = _best_threshold(probs, labels)
+    tss_val, tp, fn, fp, tn = _tss(probs, labels, threshold=best_t)
+    ece_val = _ece(probs, labels)
+    preds   = probs.argmax(axis=1)
+    acc     = (preds == labels).mean()
+    recall  = _per_class_recall(preds, labels)
+
+    print(f"\n{'='*55}")
+    print(f"  {name}")
+    print(f"{'='*55}")
+    print(f"  TSS (M+X)   : {tss_val:+.4f}   (target > 0.60)  [threshold={best_t:.2f}]")
+    print(f"  ECE         : {ece_val:.4f}    (target < 0.05)")
+    print(f"  Accuracy    : {acc:.4f}")
+    print(f"  Confusion (M+X binary): TP={tp}  FN={fn}  FP={fp}  TN={tn}")
+    print(f"\n  Per-class recall:")
+    for cls, val in recall.items():
+        if val is None:
+            print(f"    {cls:8s}: (no samples in test set)")
+        else:
+            print(f"    {cls:8s}: {val:.3f}")
+
+    # Class distribution in test set
+    print(f"\n  Label distribution: ", end="")
+    for c, name_c in enumerate(_CLASS_NAMES):
+        n = (labels == c).sum()
+        print(f"{name_c}={n}", end="  ")
+    print()
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate ARUNA L4 models on test split")
+    parser.add_argument("--dataset-dir", default="data/dataset/")
+    parser.add_argument("--split",       default="test", choices=["train", "val", "test"])
+    parser.add_argument("--tcn-weight",  type=float, default=0.6)
+    parser.add_argument("--xgb-weight",  type=float, default=0.4)
+    args = parser.parse_args()
+
+    test_pq = Path(args.dataset_dir) / f"{args.split}.parquet"
+    if not test_pq.exists():
+        print(f"Dataset not found: {test_pq}")
+        sys.exit(1)
+
+    logger.info("Loading %s split from %s ...", args.split, test_pq)
+    df     = pd.read_parquet(test_pq)
+    labels = df["label"].to_numpy(dtype=np.int32)
+
+    logger.info("%s split: %d samples", args.split, len(df))
+
+    # TCN
+    tcn_probs = run_tcn(df)
+    _report("DualStreamTCN", tcn_probs, labels)
+
+    # XGBoost
+    xgb_probs = run_xgb(df)
+    if xgb_probs is not None:
+        _report("XGBoost", xgb_probs, labels)
+
+        # Ensemble
+        w_tcn = args.tcn_weight
+        w_xgb = args.xgb_weight
+        ens_probs = w_tcn * tcn_probs + w_xgb * xgb_probs
+        _report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})", ens_probs, labels)
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()

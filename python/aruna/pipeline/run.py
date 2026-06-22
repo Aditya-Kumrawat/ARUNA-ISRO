@@ -719,8 +719,8 @@ def main(argv=None):
             logger.warning("FITS dir not found: %s", fits_dir)
 
     if not physics_frames:
-        logger.info("L1/L2: Using synthetic X6.3 physics profile (300 frames)")
-        physics_frames = _make_synthetic_physics_frames(300)
+        logger.info("L1/L2: Using synthetic X6.3 physics profile (700 frames)")
+        physics_frames = _make_synthetic_physics_frames(700)
 
     # ── L3: Nowcasting ────────────────────────────────────────────────────────
     nowcast_event, _ = run_l3(physics_frames)

@@ -106,14 +106,21 @@ class FeatureExtractor:
 
         for f in frames:
             # ── Thermal stream (9) ────────────────────────────────────────────
+            # EM_cm3 and dEM_dt match build_dataset.py training transform:
+            # log10(EM) and symmetric-log(dEM). Raw EM (~1e48) overflows float32
+            # and is off-distribution vs the values the TCN trained on (~48).
+            _em  = _nan_to_zero(f.EM_cm3)
+            _dem = _nan_to_zero(f.dEM_dt)
+            _em_log  = math.log10(max(_em, 1e30))
+            _dem_log = math.copysign(math.log10(1.0 + abs(_dem)), _dem) if _dem else 0.0
             thermal_rows.append([
                 _nan_to_zero(f.T_MK),
-                _nan_to_zero(f.EM_cm3),
+                _em_log,
                 _nan_to_zero(f.DNI),
                 _nan_to_zero(f.tnpsv_magnitude),
                 _nan_to_zero(f.tnpsv_angle_rad),
                 _nan_to_zero(f.dT_dt),
-                _nan_to_zero(f.dEM_dt),
+                _dem_log,
                 _nan_to_zero(f.d2T_dt2),
                 _nan_to_zero(getattr(f, 'tnci', 0.0)),   # TNCI (PRD §13.4)
             ])
@@ -146,13 +153,25 @@ class FeatureExtractor:
         arr_nonthermal = np.array(nonthermal_rows, dtype=np.float64)
         arr_shared = np.array(shared_rows, dtype=np.float64)
 
-        # Apply scaler on full concatenated matrix if available
+        # Apply scaler on full concatenated matrix if available and feature count matches
         if self._scaler is not None:
-            full = np.concatenate([arr_thermal, arr_nonthermal, arr_shared], axis=1)  # (T, 24)
-            full = self._scaler.transform(full)
-            arr_thermal = full[:, :N_THERMAL]
-            arr_nonthermal = full[:, N_THERMAL:N_THERMAL + N_NONTHERMAL]
-            arr_shared = full[:, N_THERMAL + N_NONTHERMAL:]
+            full = np.concatenate([arr_thermal, arr_nonthermal, arr_shared], axis=1)
+            expected = getattr(self._scaler, 'n_features_in_', full.shape[1])
+            if expected == full.shape[1]:
+                full = self._scaler.transform(full)
+                arr_thermal    = full[:, :N_THERMAL]
+                arr_nonthermal = full[:, N_THERMAL:N_THERMAL + N_NONTHERMAL]
+                arr_shared     = full[:, N_THERMAL + N_NONTHERMAL:]
+            else:
+                import logging as _log
+                _logger = _log.getLogger(__name__)
+                if not getattr(_logger, '_scaler_mismatch_warned', False):
+                    _logger.warning(
+                        "Scaler expects %d features but extractor produced %d — "
+                        "skipping scaling (retrain scaler with build_dataset.py to fix)",
+                        expected, full.shape[1],
+                    )
+                    _logger._scaler_mismatch_warned = True
 
         # Convert to (1, T, F_i) float32 tensors — batch dimension first
         t_thermal = torch.tensor(arr_thermal, dtype=torch.float32).unsqueeze(0)

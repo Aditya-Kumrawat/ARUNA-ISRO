@@ -13,7 +13,7 @@ import json
 import logging
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -27,6 +27,8 @@ from .ensemble import EnsembleWeighter
 from .features import FeatureExtractor
 from .models import ForecastConfig
 from .moirai_model import MoiraiForecaster
+from .postprocess import blend_with_physics, prior_correction
+from .xgb_model import XGBoostForecaster
 
 # Lazy torch import — required for TCN forward pass
 try:
@@ -72,7 +74,7 @@ def _build_forecast_frame(
     newest_frame: PhysicsFrame = buffer[-1]
 
     return ForecastFrame(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         horizon_minutes=horizon_minutes,
         prob_quiet=float(probs[0]),
         prob_B=float(probs[1]),
@@ -123,8 +125,9 @@ class ForecastOrchestrator:
         self._buffer: deque[PhysicsFrame] = deque(maxlen=self._cfg.sequence_length)
 
         # Sub-components
-        self._extractor = FeatureExtractor()
+        self._extractor = FeatureExtractor.from_file(self._cfg.feature_scaler_path)
         self._moirai = MoiraiForecaster(context_length=self._cfg.moirai_context_length)
+        self._xgb = XGBoostForecaster()
         self._ensemble = EnsembleWeighter(self._cfg)
         self._calibrator = MapieCalibrator(self._cfg)
         self._calibrator.load()   # no-op if file missing (passthrough mode)
@@ -201,18 +204,52 @@ class ForecastOrchestrator:
         tcn_probs = self._tcn_infer(t_thermal, t_nonthermal, t_shared,
                                     latest_frame=frames[-1] if frames else None)
 
-        # ── Moirai zero-shot forecast ─────────────────────────────────────────
-        # Build a numpy feature array for Moirai from the thermal stream
-        feature_history = t_thermal.squeeze(0).numpy()  # (T, 8)
-        moirai_probs, context_clipped = self._moirai.predict(feature_history)
+        # ── XGBoost ensemble member ───────────────────────────────────────────
+        xgb_probs = self._xgb.predict(frames)
 
         # ── Ensemble ──────────────────────────────────────────────────────────
-        ensemble_probs, w_tcn, w_moirai = self._ensemble.combine(
-            tcn_probs, moirai_probs, context_was_clipped=context_clipped
-        )
+        # Priority: XGBoost (trained) > Moirai (zero-shot) > TCN-only
+        # Uniform fallback from either model dilutes TCN — bypass it.
+        if self._xgb.available:
+            ensemble_probs, w_tcn, w_moirai = self._ensemble.combine(
+                tcn_probs, xgb_probs, context_was_clipped=False
+            )
+        elif self._moirai.available:
+            feature_history = t_thermal.squeeze(0).numpy()
+            moirai_probs, context_clipped = self._moirai.predict(feature_history)
+            ensemble_probs, w_tcn, w_moirai = self._ensemble.combine(
+                tcn_probs, moirai_probs, context_was_clipped=context_clipped
+            )
+        else:
+            ensemble_probs, w_tcn, w_moirai = tcn_probs, 1.0, 0.0
+
+        # ── Rare-event post-processing (no retraining) ────────────────────────
+        # 1) Prior correction lifts probability mass toward rare M/X classes,
+        #    undoing the QUIET base-rate bias the models learned on imbalanced data.
+        # 2) Physics blend mixes in the HOPE/DNI/SHEI/T heuristic — the reliable
+        #    backbone for physically-obvious events (e.g. X6.3).
+        latest = frames[-1] if frames else None
+        post_probs = ensemble_probs
+        if self._cfg.enable_prior_correction:
+            post_probs = prior_correction(
+                post_probs,
+                self._cfg.class_priors,
+                tau=self._cfg.prior_correction_tau,
+            )
+        if self._cfg.enable_physics_blend and latest is not None:
+            from .tcn_model import physics_heuristic_probs
+            phys = physics_heuristic_probs(
+                hope_flag=bool(getattr(latest, "hope_flag", False)),
+                DNI=float(getattr(latest, "DNI", 0.0) or 0.0),
+                SHEI=float(getattr(latest, "SHEI", -2.0) or -2.0),
+                T_MK=float(getattr(latest, "T_MK", 2.0) or 2.0),
+            )
+            post_probs = blend_with_physics(
+                post_probs, phys, physics_weight=self._cfg.physics_blend_weight
+            )
 
         # ── Calibration ───────────────────────────────────────────────────────
-        cal_probs, pred_set, ece = self._calibrator.calibrate(ensemble_probs)
+        cal_probs, pred_set, ece = self._calibrator.calibrate(post_probs)
 
         # ── Lead time estimate ────────────────────────────────────────────────
         lead_time_sec, lead_time_unc_sec = self._estimate_lead_time(
@@ -220,8 +257,7 @@ class ForecastOrchestrator:
         )
 
         # ── Physics state ─────────────────────────────────────────────────────
-        latest = frames[-1]
-        physics_state = latest.flare_phase
+        physics_state = latest.flare_phase if latest is not None else "QUIET"
 
         # ── Assemble ForecastFrames (one per horizon) ─────────────────────────
         results: List[ForecastFrame] = []

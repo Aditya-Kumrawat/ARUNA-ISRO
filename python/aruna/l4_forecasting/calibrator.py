@@ -33,7 +33,7 @@ def _compute_ece(probs: np.ndarray, n_bins: int = 10) -> float:
 
 class MapieCalibrator:
     """
-    Thin wrapper around mapie.classification.MapieClassifier.
+    Thin wrapper around MAPIE conformal classifiers (SplitConformalClassifier in v1.x).
 
     If MAPIE is not installed or no calibration pickle is loaded,
     the calibrator operates in passthrough mode:
@@ -68,10 +68,13 @@ class MapieCalibrator:
 
     def load(self, path: str | None = None) -> None:
         """
-        Load a pre-fitted MapieClassifier from a pickle file.
+        Load calibration data from a pickle file.
+
+        Supports two formats:
+        - dict with keys {quantiles, val_probs, val_labels, ece} — custom conformal format
+        - fitted MAPIE classifier object (legacy)
 
         If path is None, uses config.mapie_calibration_path.
-        If the file does not exist, logs a warning and stays in passthrough mode.
         """
         target = Path(path or self._cfg.mapie_calibration_path)
         if not target.exists():
@@ -81,16 +84,47 @@ class MapieCalibrator:
                 target,
             )
             return
-        if not self._mapie_available:
-            logger.warning("MapieCalibrator: mapie not installed — cannot load calibration file")
-            return
         try:
             with open(target, "rb") as fh:
-                self._mapie = pickle.load(fh)
-            logger.info("MapieCalibrator: loaded from %s", target)
+                obj = pickle.load(fh)
+            if isinstance(obj, dict) and "quantiles" in obj:
+                self._mapie = obj
+                ece_raw = obj.get("ece", {})
+                # Store a scalar ECE for the QUIET class (class 0) as a representative
+                self._last_ece = float(self._scalar_ece(ece_raw))
+                logger.info(
+                    "MapieCalibrator: loaded dict-format calibration from %s  ECE≈%.4f",
+                    target, self._last_ece,
+                )
+            elif hasattr(obj, "predict"):
+                self._mapie = obj
+                logger.info("MapieCalibrator: loaded MAPIE object from %s", target)
+            else:
+                logger.error(
+                    "MapieCalibrator: unrecognised format in %s (type=%s) — passthrough mode",
+                    target, type(obj).__name__,
+                )
         except Exception as exc:
             logger.error("MapieCalibrator: failed to load %s: %s — passthrough mode", target, exc)
             self._mapie = None
+
+    @staticmethod
+    def _scalar_ece(ece_raw) -> float:
+        """Extract a single ECE float from the per-class ECE structure."""
+        if isinstance(ece_raw, (int, float)):
+            return float(ece_raw)
+        if isinstance(ece_raw, dict):
+            values = []
+            for v in ece_raw.values():
+                if isinstance(v, dict) and "accs" in v and "confs" in v:
+                    accs   = np.array(v["accs"],   dtype=float)
+                    confs  = np.array(v["confs"],  dtype=float)
+                    counts = np.array(v.get("counts", np.ones(len(accs))), dtype=float)
+                    n = counts.sum()
+                    if n > 0:
+                        values.append(float((counts / n * np.abs(accs - confs)).sum()))
+            return float(np.mean(values)) if values else 0.0
+        return 0.0
 
     @property
     def is_calibrated(self) -> bool:
@@ -122,16 +156,28 @@ class MapieCalibrator:
             return probs.copy(), [argmax_class], 0.0
 
         try:
-            from mapie.classification import MapieClassifier  # noqa: F401
-
-            # MAPIE expects 2D input (n_samples, n_classes)
-            X_input = probs.reshape(1, -1)
-            _, prediction_sets = self._mapie.predict(X_input, alpha=self._cfg.mapie_alpha)
-            # prediction_sets shape: (1, n_classes, 1) — squeeze
-            included = prediction_sets[0, :, 0]  # bool array (5,)
-            pred_set = [CLASS_LABELS[i] for i in range(5) if included[i]]
-            if not pred_set:
-                pred_set = [argmax_class]  # always at least one class
+            if isinstance(self._mapie, dict):
+                # Dict-format: LAC conformal prediction using stored quantiles.
+                # A class k is included when probs[k] >= 1 - q_alpha (LAC rule).
+                alpha   = self._cfg.mapie_alpha          # e.g. 0.10
+                q       = self._mapie["quantiles"].get(alpha)
+                if q is None:
+                    # Nearest available alpha
+                    available = self._mapie["quantiles"]
+                    q = available[min(available, key=lambda a: abs(a - alpha))]
+                threshold = 1.0 - float(q)
+                included  = probs >= threshold
+                pred_set  = [CLASS_LABELS[i] for i in range(5) if included[i]]
+                if not pred_set:
+                    pred_set = [argmax_class]
+            else:
+                # Fitted MAPIE object (legacy path)
+                X_input = probs.reshape(1, -1)
+                _, prediction_sets = self._mapie.predict(X_input, alpha=self._cfg.mapie_alpha)
+                included = prediction_sets[0, :, 0]
+                pred_set = [CLASS_LABELS[i] for i in range(5) if included[i]]
+                if not pred_set:
+                    pred_set = [argmax_class]
 
             return probs.copy(), pred_set, self._last_ece
 

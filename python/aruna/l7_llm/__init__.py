@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aruna.l7_llm.models import BriefingContext, AlertBriefing
 from aruna.l7_llm.client import BriefingLLM, BriefingLLMError
@@ -51,5 +51,5 @@ class BriefingOrchestrator:
             briefing_source=source,
             hallucination_violations=[] if ok else violations,
             context_used=ctx,
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).isoformat(),
         )

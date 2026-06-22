@@ -195,6 +195,7 @@ def train(
     lr: float,
     device_str: str,
     no_resume: bool,
+    train_parquet: str | None = None,
 ) -> None:
     try:
         import torch
@@ -221,12 +222,13 @@ def train(
         logger.warning("No scaler found at %s — using raw values", scaler_path)
 
     # Datasets
-    train_pq = Path(dataset_dir) / "train.parquet"
+    train_pq = Path(train_parquet) if train_parquet else Path(dataset_dir) / "train.parquet"
     val_pq   = Path(dataset_dir) / "val.parquet"
     if not train_pq.exists() or not val_pq.exists():
-        print(f"Dataset not found in {dataset_dir}. Run build_dataset.py first.")
+        print(f"Dataset not found. train={train_pq}  val={val_pq}")
         sys.exit(1)
 
+    logger.info("Train parquet: %s", train_pq)
     train_ds = SolarFlareDataset(str(train_pq), scaler)
     val_ds   = SolarFlareDataset(str(val_pq),   scaler)
     logger.info("Train windows: %d  |  Val windows: %d", len(train_ds), len(val_ds))
@@ -415,10 +417,65 @@ def train(
         logger.warning("MAPIE calibration skipped: %s", exc)
         logger.warning("TCN weights are still saved. Run 'pip install mapie scikit-learn' and re-run to add calibration.")
 
+    # ── Threshold optimisation (val is all-QUIET, so use train flares) ─────────
+    logger.info("Optimising M+X decision threshold on training flare windows ...")
+    try:
+        model.load_state_dict(torch.load(tcn_out, map_location=device))
+        model.eval()
+
+        # Collect all training predictions; then search threshold on flare slice.
+        # Using training data for threshold search is a mild form of optimism, but
+        # it's the only option when val has no flares.  The test set is never touched.
+        train_probs_list: list[np.ndarray] = []
+        train_labels_list: list[int] = []
+
+        with torch.no_grad():
+            for x_th, x_nth, x_sh, _, hard_labels in DataLoader(
+                train_ds, batch_size=batch_size, shuffle=False
+            ):
+                logits = model(x_th.to(device), x_nth.to(device), x_sh.to(device))
+                probs  = torch.softmax(logits, dim=1).cpu().numpy()
+                train_probs_list.append(probs)
+                train_labels_list.extend(hard_labels.tolist())
+
+        train_probs_np  = np.concatenate(train_probs_list, axis=0)
+        train_labels_np = np.array(train_labels_list)
+
+        # Only use flare windows for threshold tuning (QUIET windows always
+        # pull the optimal threshold toward 1.0, defeating the purpose).
+        flare_mask  = train_labels_np >= 2   # C, M, X
+        th_probs    = train_probs_np[flare_mask]
+        th_labels   = train_labels_np[flare_mask]
+
+        if len(th_probs) > 0:
+            best_th, best_th_tss = 0.5, -999.0
+            for th in np.arange(0.05, 0.95, 0.01):
+                tss = _compute_tss(th_probs, th_labels, threshold=float(th))
+                if tss > best_th_tss:
+                    best_th_tss = tss
+                    best_th = float(th)
+
+            logger.info(
+                "Optimal M+X threshold (on train flares): %.2f  →  TSS=%.4f",
+                best_th, best_th_tss,
+            )
+            # Persist threshold alongside the checkpoint so inference can load it.
+            th_path = Path(tcn_out).with_suffix(".threshold.npy")
+            np.save(str(th_path), np.array([best_th]))
+            logger.info("Threshold saved -> %s", th_path)
+        else:
+            logger.warning("No flare windows found in training set — threshold not saved.")
+            best_th = 0.5
+
+    except Exception as exc:
+        logger.warning("Threshold optimisation failed: %s", exc)
+        best_th = 0.5
+
     # ── Final summary ──────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print(f"  Best validation TSS : {best_tss:.4f}  (target > 0.60)")
+    print(f"  Optimal M+X threshold : {best_th:.2f}")
     print(f"  TCN weights         : {tcn_out}")
     print(f"  MAPIE calibrator    : {mapie_out}")
     print(f"  Training log        : {log_path}")
@@ -441,10 +498,16 @@ def main() -> None:
                         help="'cuda' or 'cpu'. Falls back to cpu if cuda unavailable.")
     parser.add_argument("--no-resume",    action="store_true",
                         help="Train from scratch even if checkpoint exists")
+    parser.add_argument(
+        "--train-parquet", default=None,
+        help="Override training parquet path (e.g. data/dataset/train_balanced_augmented.parquet). "
+             "Defaults to <dataset-dir>/train.parquet.",
+    )
     args = parser.parse_args()
     train(
         args.dataset_dir, args.scaler_path, args.tcn_out, args.mapie_out,
         args.epochs, args.batch_size, args.lr, args.device, args.no_resume,
+        train_parquet=args.train_parquet,
     )
 
 

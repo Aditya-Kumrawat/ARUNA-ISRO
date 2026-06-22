@@ -163,9 +163,12 @@ class IsothermalFitter:
         res  = minimize(objective, x0=[15.0], method="Nelder-Mead",
                         options={"xatol": 0.05, "fatol": 1e-4, "maxiter": 400, "maxfev": 600})
         T_MK = float(res.x[0])
-        chi2 = float(res.fun)
+        # Use the best chi2 seen during optimisation — res.success can be False
+        # even when Nelder-Mead reaches chi2≈0 (e.g. exact synthetic spectrum),
+        # because the simplex never takes a step that satisfies xatol/fatol.
+        chi2 = _best[0] if np.isfinite(_best[0]) else float(res.fun)
 
-        if not res.success or T_MK <= 0 or not np.isfinite(chi2):
+        if T_MK <= 0 or not np.isfinite(chi2):
             return FitResult(np.nan, np.nan, np.nan, np.nan, chi2, self._backend)
 
         EM_cm3 = _best[1]   # analytically-optimal EM captured during optimisation

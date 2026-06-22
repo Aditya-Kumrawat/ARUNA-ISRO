@@ -156,14 +156,51 @@ def _frame_to_dict(pf) -> dict:
     }
 
 
+# ── GOES-aware day classification ─────────────────────────────────────────────
+
+def _classify_days(dates: list[str], goes: pd.DataFrame) -> dict[str, str]:
+    """Classify each date as FLARE (M/X), ACTIVE (C), or QUIET (B/A/none)."""
+    _RANK = {"X": 4, "M": 3, "C": 2, "B": 1, "A": 0}
+    result = {}
+    for d in dates:
+        day_start = pd.Timestamp(f"{d[:4]}-{d[4:6]}-{d[6:]}", tz="UTC")
+        day_end   = day_start + pd.Timedelta(days=1)
+        events    = goes[(goes["peak_time"] >= day_start) & (goes["peak_time"] < day_end)]
+        if events.empty:
+            result[d] = "QUIET"
+            continue
+        max_rank = events["goes_class_letter"].str.upper().map(_RANK).fillna(0).max()
+        result[d] = "FLARE" if max_rank >= 3 else ("ACTIVE" if max_rank >= 2 else "QUIET")
+    return result
+
+
+# ── STIX fallback ──────────────────────────────────────────────────────────────
+
+def _fetch_stix_fallback(date_str: str) -> list:
+    """Fetch Solar Orbiter STIX data as HEL1OS substitute for a given date."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "python"))
+        from aruna.l1_ingestion.stix_provider import STIXProvider
+        date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+        provider = STIXProvider()
+        return provider.fetch(f"{date}T00:00:00", f"{date}T23:59:59")
+    except ImportError:
+        logger.debug("stixdcpy not installed — STIX fallback unavailable")
+        return []
+    except Exception as exc:
+        logger.debug("STIX fetch failed for %s: %s", date_str, exc)
+        return []
+
+
 # ── Single-day processor ───────────────────────────────────────────────────────
 
 def _process_day(args: tuple) -> tuple[str, int, str]:
     """
     Worker function: process one day's FITS files → Parquet.
     Returns (date_str, n_frames_written, error_message_or_empty).
+    hel1os_files may be empty when stix_fallback=True and no local HEL1OS exists.
     """
-    date_str, solexs_files, hel1os_files, out_dir = args
+    date_str, solexs_files, hel1os_files, out_dir, stix_fallback = args
 
     out_path = Path(out_dir) / f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}.parquet"
     if out_path.exists():

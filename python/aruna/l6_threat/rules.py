@@ -25,9 +25,9 @@ GAGANYAAN = {
     "B": "NOMINAL",
     "C": "NOMINAL",
     "M1": "ELEVATED",
-    "M5": "HIGH — SHELTER ADVISORY",
-    "X1": "CRITICAL — SHELTER REQUIRED",
-    "X5": "EMERGENCY — EVA ABORT",
+    "M5": "HIGH - SHELTER ADVISORY",
+    "X1": "CRITICAL - SHELTER REQUIRED",
+    "X5": "EMERGENCY - EVA ABORT",
 }
 
 # GOES band maps to radiation risk level

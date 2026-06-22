@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 import numpy as np
@@ -77,7 +77,7 @@ class KafkaPublisher:
         summary = {
             'schema_version': _SCHEMA_VERSION,
             'pipeline_version': _PIPELINE_VERSION,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             **counts,
         }
         try:

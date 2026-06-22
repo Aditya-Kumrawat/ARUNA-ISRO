@@ -80,6 +80,10 @@ def main() -> None:
     parser.add_argument("--lr",           type=float, default=0.05)
     parser.add_argument("--binary", action="store_true",
                         help="Train binary QUIET vs M+X classifier (simpler, often higher TSS)")
+    parser.add_argument("--train-parquet", default=None,
+                        help="Override training parquet (default: <dataset-dir>/train.parquet)")
+    parser.add_argument("--device", default="cuda",
+                        help="XGBoost device: 'cuda' or 'cpu'")
     args = parser.parse_args()
 
     try:
@@ -89,14 +93,14 @@ def main() -> None:
         sys.exit(1)
 
     dataset_dir = Path(args.dataset_dir)
-    train_pq    = dataset_dir / "train.parquet"
+    train_pq    = Path(args.train_parquet) if args.train_parquet else dataset_dir / "train.parquet"
     val_pq      = dataset_dir / "val.parquet"
 
     if not train_pq.exists():
         print(f"Dataset not found: {train_pq}. Run build_dataset.py first.")
         sys.exit(1)
 
-    logger.info("Loading train split ...")
+    logger.info("Train parquet: %s", train_pq)
     train_df = pd.read_parquet(train_pq)
     logger.info("Loading val split ...")
     val_df   = pd.read_parquet(val_pq)
@@ -131,6 +135,7 @@ def main() -> None:
             subsample             = 0.8,
             colsample_bytree      = 0.8,
             min_child_weight      = 1,
+            device                = args.device,
             n_jobs                = -1,
             verbosity             = 1,
         )
@@ -169,6 +174,7 @@ def main() -> None:
             subsample             = 0.8,
             colsample_bytree      = 0.8,
             min_child_weight      = 1,
+            device                = args.device,
             n_jobs                = -1,
             verbosity             = 1,
         )

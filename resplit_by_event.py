@@ -107,43 +107,64 @@ for split_name in ("train", "val", "test"):
 # ── 6. Save: reload full parquets, filter by assigned indices, write ──────────
 
 import time as _time
-print("\nSaving new splits (reloading full data) ...", flush=True)
-print("  NOTE: each source file is reloaded in full; train.parquet (~1.2 GB)",
-      "takes 1-2 min to load with no output. This is normal — do not interrupt.",
-      flush=True)
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-# Build a lookup: (source_split, source_idx) -> new_split
-meta["_key"] = meta["_source"] + "_" + meta["_source_idx"].astype(str)
-key_to_split = dict(zip(meta["_key"], meta["split"]))
+print("\nSaving new splits (streaming — bounded memory) ...", flush=True)
+
+# Per-source split assignment as a numpy array indexed by original row order.
+# meta carries _source and _source_idx, so sort by _source_idx to recover order.
+split_by_source = {}
+for src in full_paths:
+    sub = meta[meta["_source"] == src].sort_values("_source_idx")
+    split_by_source[src] = sub["split"].to_numpy()
+
+# One output writer per split, opened lazily on first batch. Write to _out_*
+# temp files first, then atomically replace the source files at the end so we
+# never clobber an input while still reading from it.
+out_final = {s: DATA_DIR / f"{s}.parquet"      for s in ("train", "val", "test")}
+out_tmp   = {s: DATA_DIR / f"_out_{s}.parquet"  for s in ("train", "val", "test")}
+writers   = {s: None for s in ("train", "val", "test")}
+counts    = {s: 0    for s in ("train", "val", "test")}
+
+BATCH = 2000  # rows per batch → ~90 MB peak per batch, safe on free Colab
 
 for src_split, src_path in full_paths.items():
     _t0 = _time.monotonic()
-    print(f"  [{src_split}] loading {src_path.name} ...", flush=True)
-    full_df = pd.read_parquet(src_path)
-    print(f"  [{src_split}] loaded {len(full_df)} rows in {_time.monotonic()-_t0:.0f}s; "
-          f"assigning splits ...", flush=True)
-    full_df["_key"] = src_split + "_" + np.arange(len(full_df)).astype(str)
-    full_df["split"] = full_df["_key"].map(key_to_split)
+    pf  = pq.ParquetFile(src_path)
+    arr = split_by_source[src_split]
+    total = pf.metadata.num_rows
+    print(f"  [{src_split}] streaming {total} rows from {src_path.name} ...", flush=True)
 
-    for new_split in ("train", "val", "test"):
-        subset = full_df[full_df["split"] == new_split].drop(columns=["_key", "split"])
-        out_path = DATA_DIR / f"_tmp_{new_split}_{src_split}.parquet"
-        subset.to_parquet(out_path, index=False)
-    print(f"  [{src_split}] written to temp files "
-          f"({_time.monotonic()-_t0:.0f}s total)", flush=True)
-    del full_df  # free ~1.2 GB before loading the next source
+    row_ptr = 0
+    for batch in pf.iter_batches(batch_size=BATCH):
+        table = pa.Table.from_batches([batch])
+        n = table.num_rows
+        batch_splits = arr[row_ptr:row_ptr + n]
+        row_ptr += n
 
-print("  Merging temp files ...", flush=True)
-for new_split in ("train", "val", "test"):
-    parts = []
-    for src_split in full_paths:
-        tmp = DATA_DIR / f"_tmp_{new_split}_{src_split}.parquet"
-        if tmp.exists():
-            parts.append(pd.read_parquet(tmp))
-            tmp.unlink()
-    merged = pd.concat(parts, ignore_index=True)
-    out = DATA_DIR / f"{new_split}.parquet"
-    merged.to_parquet(out, index=False)
-    print(f"  Saved {len(merged)} rows -> {out}")
+        for s in ("train", "val", "test"):
+            mask = (batch_splits == s)
+            if not mask.any():
+                continue
+            sub_table = table.filter(pa.array(mask))
+            if writers[s] is None:
+                writers[s] = pq.ParquetWriter(str(out_tmp[s]), table.schema)
+            writers[s].write_table(sub_table)
+            counts[s] += sub_table.num_rows
+
+    print(f"  [{src_split}] done in {_time.monotonic()-_t0:.0f}s", flush=True)
+
+for w in writers.values():
+    if w is not None:
+        w.close()
+
+# Atomically replace inputs with the regrouped outputs
+for s in ("train", "val", "test"):
+    if out_tmp[s].exists():
+        if out_final[s].exists():
+            out_final[s].unlink()
+        out_tmp[s].rename(out_final[s])
+    print(f"  Saved {counts[s]} rows -> {out_final[s]}", flush=True)
 
 print("\nDone. Next: python python/scripts/rebalance_dataset.py")

@@ -245,6 +245,15 @@ def build(
     horizon_min: int,
     stride_sec: int,
 ) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    try:
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+    except ImportError:
+        scaler = None
+        logger.warning("scikit-learn not installed — scaler will not be fit")
+
     cache   = Path(cache_dir)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -263,55 +272,79 @@ def build(
         sys.exit(1)
     logger.info("Found %d cached days to window", len(parquet_files))
 
-    all_windows: list[dict] = []
+    # Stream ONE day at a time → per-split ParquetWriter. Accumulating every
+    # window in RAM OOMs at small strides (stride 10 over 165 days ≈ 6.6×10⁵
+    # windows × ~100 KB each ≈ tens of GB). Writing incrementally caps peak
+    # memory at a single day, and the scaler is fit with partial_fit on train.
+    n_features  = len(FEATURE_COLS)
+    out_paths   = {s: out_dir / f"{s}.parquet" for s in ("train", "val", "test")}
+    writers     = {s: None for s in ("train", "val", "test")}
+    counts      = {s: {c: 0 for c in range(5)} for s in ("train", "val", "test")}
+    total       = 0
 
     for pq_file in parquet_files:
         try:
             df = pd.read_parquet(pq_file)
             if len(df) < SEQUENCE_LENGTH:
-                logger.debug("%s: only %d rows — skipping", pq_file.name, len(df))
                 continue
             wins = _build_windows(df, goes, stride_sec, horizon_min)
-            all_windows.extend(wins)
-            logger.info("%s: %d windows", pq_file.stem, len(wins))
+            if not wins:
+                continue
+            flat = _windows_to_flat_df(wins)
+            flat["split"] = flat["window_end"].apply(_assign_split)
+
+            for s in ("train", "val", "test"):
+                sub = flat[flat["split"] == s]
+                if sub.empty:
+                    continue
+                sub = sub.drop(columns=["split"])
+                table = pa.Table.from_pandas(sub, preserve_index=False)
+                if writers[s] is None:
+                    writers[s] = pq.ParquetWriter(str(out_paths[s]), table.schema)
+                writers[s].write_table(table)
+                for c in range(5):
+                    counts[s][c] += int((sub["label"] == c).sum())
+                # Fit scaler incrementally on TRAIN windows only.
+                if s == "train" and scaler is not None:
+                    arr = np.stack([
+                        np.frombuffer(raw, dtype=np.float32).reshape(SEQUENCE_LENGTH, n_features)
+                        for raw in sub["features_bytes"].to_numpy()
+                    ]).reshape(-1, n_features)
+                    scaler.partial_fit(arr)
+                    del arr
+
+            total += len(flat)
+            logger.info("%s: %d windows  (running total %d)", pq_file.stem, len(flat), total)
+            del wins, flat
         except Exception as exc:
             logger.warning("%s: failed — %s", pq_file.name, exc)
 
-    if not all_windows:
+    for w in writers.values():
+        if w is not None:
+            w.close()
+
+    if total == 0:
         print("ERROR: No windows built. Check cache and GOES file.")
         sys.exit(1)
-
-    logger.info("Total windows: %d", len(all_windows))
-
-    # Flatten and split
-    flat_df = _windows_to_flat_df(all_windows)
-    flat_df["split"] = flat_df["window_end"].apply(_assign_split)
-
-    splits = flat_df.groupby("split").size()
-    logger.info("Split counts: %s", dict(splits))
-
-    for split_name in ("train", "val", "test"):
-        subset = flat_df[flat_df["split"] == split_name].drop(columns=["split"])
-        out_path = out_dir / f"{split_name}.parquet"
-        subset.to_parquet(out_path, index=False)
-        logger.info("Saved %d %s windows → %s", len(subset), split_name, out_path)
 
     # Label distribution per split
     print("\n=== Label Distribution ===")
     _CLASS_NAMES = {0: "QUIET", 1: "B", 2: "C", 3: "M", 4: "X"}
-    for split_name in ("train", "val", "test"):
-        subset = flat_df[flat_df["split"] == split_name]
-        if subset.empty:
+    for s in ("train", "val", "test"):
+        n_split = sum(counts[s].values())
+        if n_split == 0:
             continue
-        print(f"\n{split_name.upper()} ({len(subset)} windows):")
+        print(f"\n{s.upper()} ({n_split} windows):")
         for lbl, name in _CLASS_NAMES.items():
-            count = (subset["label"] == lbl).sum()
-            pct   = count / len(subset) * 100
-            print(f"  {name} ({lbl}): {count:>6}  ({pct:5.1f}%)")
+            c = counts[s][lbl]
+            print(f"  {name} ({lbl}): {c:>7}  ({100*c/n_split:5.1f}%)")
 
-    # Fit scaler on training set only
-    train_df = flat_df[flat_df["split"] == "train"]
-    _fit_scaler(train_df, scaler_out)
+    # Save the incrementally-fit scaler (train windows only).
+    if scaler is not None and getattr(scaler, "n_samples_seen_", 0) is not None:
+        Path(scaler_out).parent.mkdir(parents=True, exist_ok=True)
+        with open(scaler_out, "wb") as fh:
+            pickle.dump(scaler, fh)
+        logger.info("Scaler saved → %s", scaler_out)
 
     print(f"\nDataset written to {output_dir}")
     print("Next step: python python/scripts/train_tcn.py")

@@ -230,6 +230,76 @@ def _best_threshold(probs: np.ndarray, labels: np.ndarray) -> tuple[float, float
     return best_t, best_tss
 
 
+def _event_report(name: str, probs: np.ndarray, labels: np.ndarray,
+                  window_ends: np.ndarray, thresholds: list[float],
+                  gap_min: int = 30) -> None:
+    """
+    Operationally honest, per-EVENT detection metrics.
+
+    ISRO detects flare events, not 1-second windows. An M+X event spans many
+    windows; it is "detected" if the model fires (P(M)+P(X) >= threshold) on at
+    least one window inside the event's time span. False alarms are counted as
+    contiguous runs of firing on QUIET windows (one cluster = one false alarm),
+    reported per day so it maps to operational alert fatigue.
+
+    Events are formed by grouping label>=3 windows separated by <= gap_min.
+    """
+    ts = pd.to_datetime(pd.Series(window_ends), utc=True).to_numpy()
+    order = np.argsort(ts)
+    ts_s   = ts[order]
+    lab_s  = labels[order]
+    mx_score = (probs[order, 3] + probs[order, 4])
+
+    # Group M+X windows into events by temporal gap.
+    mx_idx = np.where(lab_s >= 3)[0]
+    groups: list[list[int]] = []
+    if len(mx_idx):
+        cur = [int(mx_idx[0])]
+        for j in mx_idx[1:]:
+            gap_min_actual = (ts_s[j] - ts_s[cur[-1]]) / np.timedelta64(1, "m")
+            if gap_min_actual > gap_min:
+                groups.append(cur); cur = [int(j)]
+            else:
+                cur.append(int(j))
+        groups.append(cur)
+
+    n_events = len(groups)
+    span_days = max((ts_s[-1] - ts_s[0]) / np.timedelta64(1, "D"), 1e-9)
+    quiet_mask = (lab_s == 0)
+
+    print(f"\n{'='*55}")
+    print(f"  {name} — PER-EVENT detection")
+    print(f"{'='*55}")
+    print(f"  M+X events in test : {n_events}   (over {span_days:.1f} days)")
+    print(f"  Window-level M+X   : {(lab_s>=3).sum()} windows")
+    print(f"\n  {'thr':>5} | {'events det.':>11} | {'event recall':>12} | {'false alarms':>12} | {'FA/day':>7}")
+    print(f"  {'-'*5}-+-{'-'*11}-+-{'-'*12}-+-{'-'*12}-+-{'-'*7}")
+
+    for thr in thresholds:
+        fire = mx_score >= thr
+        detected = 0
+        for g in groups:
+            lo, hi = g[0], g[-1]
+            if fire[lo:hi + 1].any():
+                detected += 1
+        # false-alarm clusters: contiguous QUIET firing runs
+        fa_clusters = 0
+        in_cluster = False
+        for k in range(len(lab_s)):
+            if quiet_mask[k] and fire[k]:
+                if not in_cluster:
+                    fa_clusters += 1
+                    in_cluster = True
+            else:
+                in_cluster = False
+        recall = detected / max(n_events, 1)
+        fa_per_day = fa_clusters / span_days
+        print(f"  {thr:5.2f} | {detected:>11} | {recall:>11.1%} | {fa_clusters:>12} | {fa_per_day:>7.1f}")
+
+    print(f"\n  (Event recall = fraction of M+X events with >=1 firing window during the event.\n"
+          f"   A flare caught even once = detected — operationally that triggers the alert.)")
+
+
 def _report(name: str, probs: np.ndarray, labels: np.ndarray,
             saved_threshold: float | None = None) -> None:
     best_t, _    = _best_threshold(probs, labels)
@@ -276,6 +346,8 @@ def main() -> None:
     parser.add_argument("--split",       default="test", choices=["train", "val", "test"])
     parser.add_argument("--tcn-weight",  type=float, default=0.6)
     parser.add_argument("--xgb-weight",  type=float, default=0.4)
+    parser.add_argument("--event-level", action="store_true",
+                        help="Also report per-EVENT detection metrics (operationally honest)")
     args = parser.parse_args()
 
     test_pq = Path(args.dataset_dir) / f"{args.split}.parquet"
@@ -295,20 +367,33 @@ def main() -> None:
     if saved_threshold is not None:
         logger.info("Saved operational threshold: %.2f", saved_threshold)
 
+    window_ends = df["window_end"].to_numpy() if args.event_level else None
+    # Thresholds to sweep for the per-event table: a low operating point, the
+    # saved val-tuned one, and a couple in between.
+    ev_thresholds = sorted({0.01, 0.05, 0.10, 0.25,
+                            saved_threshold if saved_threshold else 0.50})
+
     # TCN
     tcn_probs = run_tcn(df)
     _report("DualStreamTCN", tcn_probs, labels, saved_threshold)
+    if args.event_level:
+        _event_report("DualStreamTCN", tcn_probs, labels, window_ends, ev_thresholds)
 
     # XGBoost
     xgb_probs = run_xgb(df)
     if xgb_probs is not None:
         _report("XGBoost", xgb_probs, labels)
+        if args.event_level:
+            _event_report("XGBoost", xgb_probs, labels, window_ends, ev_thresholds)
 
         # Ensemble
         w_tcn = args.tcn_weight
         w_xgb = args.xgb_weight
         ens_probs = w_tcn * tcn_probs + w_xgb * xgb_probs
         _report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})", ens_probs, labels, saved_threshold)
+        if args.event_level:
+            _event_report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})",
+                          ens_probs, labels, window_ends, ev_thresholds)
 
     print("\nDone.")
 

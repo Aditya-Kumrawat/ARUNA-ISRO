@@ -205,6 +205,7 @@ def train(
     device_str: str,
     no_resume: bool,
     train_parquet: str | None = None,
+    no_sampler: bool = False,
 ) -> None:
     try:
         import torch
@@ -242,9 +243,26 @@ def train(
     val_ds   = SolarFlareDataset(str(val_pq),   scaler)
     logger.info("Train windows: %d  |  Val windows: %d", len(train_ds), len(val_ds))
 
-    sampler = _make_sampler(train_ds)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler,
-                              num_workers=0, pin_memory=(device_str != "cpu"))
+    # The WeightedRandomSampler class weights [1,3,5,10,20] were tuned for the RAW
+    # 12.7:1 imbalanced parquet. If the training parquet is already physically
+    # rebalanced (train_balanced_augmented.parquet), applying the sampler on top
+    # double-counts: ~83% of batches become M/X drawn with replacement from only
+    # ~135 distinct events → memorisation in 3 epochs → val divergence + ECE blow-up.
+    # Use --no-sampler with a pre-balanced parquet to draw in natural proportion.
+    if no_sampler:
+        labels_dbg = train_ds._df["label"].to_numpy()
+        logger.info(
+            "Sampler DISABLED — plain shuffle (dataset assumed pre-balanced). "
+            "Class counts: QUIET=%d C=%d M=%d X=%d",
+            (labels_dbg == 0).sum(), (labels_dbg == 2).sum(),
+            (labels_dbg == 3).sum(), (labels_dbg == 4).sum(),
+        )
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  num_workers=0, pin_memory=(device_str != "cpu"))
+    else:
+        sampler = _make_sampler(train_ds)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler,
+                                  num_workers=0, pin_memory=(device_str != "cpu"))
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=0, pin_memory=(device_str != "cpu"))
 
@@ -518,6 +536,9 @@ def main() -> None:
                         help="'cuda' or 'cpu'. Falls back to cpu if cuda unavailable.")
     parser.add_argument("--no-resume",    action="store_true",
                         help="Train from scratch even if checkpoint exists")
+    parser.add_argument("--no-sampler",   action="store_true",
+                        help="Disable WeightedRandomSampler (use when --train-parquet is "
+                             "already physically balanced, e.g. train_balanced_augmented.parquet)")
     parser.add_argument(
         "--train-parquet", default=None,
         help="Override training parquet path (e.g. data/dataset/train_balanced_augmented.parquet). "
@@ -528,6 +549,7 @@ def main() -> None:
         args.dataset_dir, args.scaler_path, args.tcn_out, args.mapie_out,
         args.epochs, args.batch_size, args.lr, args.device, args.no_resume,
         train_parquet=args.train_parquet,
+        no_sampler=args.no_sampler,
     )
 
 

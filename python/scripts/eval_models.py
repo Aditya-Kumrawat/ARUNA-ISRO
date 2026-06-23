@@ -230,19 +230,37 @@ def _best_threshold(probs: np.ndarray, labels: np.ndarray) -> tuple[float, float
     return best_t, best_tss
 
 
+def _apply_persistence(fire: np.ndarray, k: int) -> np.ndarray:
+    """
+    Hysteresis/persistence filter: a window only counts as 'firing' once k
+    consecutive windows have been above threshold. Kills isolated probability
+    spikes (the dominant false-alarm source) while real flares — which persist
+    for many windows — still latch.
+    """
+    if k <= 1:
+        return fire
+    out = np.zeros_like(fire)
+    run = 0
+    for i in range(len(fire)):
+        run = run + 1 if fire[i] else 0
+        out[i] = run >= k
+    return out
+
+
 def _event_report(name: str, probs: np.ndarray, labels: np.ndarray,
                   window_ends: np.ndarray, thresholds: list[float],
+                  persistence_levels: tuple[int, ...] = (1,),
                   gap_min: int = 30) -> None:
     """
-    Operationally honest, per-EVENT detection metrics.
+    Operationally honest, per-EVENT detection metrics with a persistence policy.
 
-    ISRO detects flare events, not 1-second windows. An M+X event spans many
-    windows; it is "detected" if the model fires (P(M)+P(X) >= threshold) on at
-    least one window inside the event's time span. False alarms are counted as
-    contiguous runs of firing on QUIET windows (one cluster = one false alarm),
-    reported per day so it maps to operational alert fatigue.
-
-    Events are formed by grouping label>=3 windows separated by <= gap_min.
+    ISRO issues alerts on flare events, not 1-second windows. An M+X event spans
+    many windows; it is "detected" if the alert policy fires on at least one
+    window inside the event's span. The policy requires `persistence` consecutive
+    windows above threshold before firing (hysteresis), which suppresses the
+    isolated spikes that drive false alarms. We report, per (threshold,
+    persistence): event recall, false alarms/day, and mean lead time — the
+    metrics an operational warning system is actually judged on.
     """
     ts = pd.to_datetime(pd.Series(window_ends), utc=True).to_numpy()
     order = np.argsort(ts)
@@ -256,8 +274,7 @@ def _event_report(name: str, probs: np.ndarray, labels: np.ndarray,
     if len(mx_idx):
         cur = [int(mx_idx[0])]
         for j in mx_idx[1:]:
-            gap_min_actual = (ts_s[j] - ts_s[cur[-1]]) / np.timedelta64(1, "m")
-            if gap_min_actual > gap_min:
+            if (ts_s[j] - ts_s[cur[-1]]) / np.timedelta64(1, "m") > gap_min:
                 groups.append(cur); cur = [int(j)]
             else:
                 cur.append(int(j))
@@ -266,38 +283,50 @@ def _event_report(name: str, probs: np.ndarray, labels: np.ndarray,
     n_events = len(groups)
     span_days = max((ts_s[-1] - ts_s[0]) / np.timedelta64(1, "D"), 1e-9)
     quiet_mask = (lab_s == 0)
+    # "Onset" proxy = end of each event's labelled span (labels look forward by
+    # the horizon, so the last labelled window sits ~at the flare). Lead time =
+    # onset - first alert time within the event.
+    onset_ts = {gi: ts_s[g[-1]] for gi, g in enumerate(groups)}
 
-    print(f"\n{'='*55}")
-    print(f"  {name} — PER-EVENT detection")
-    print(f"{'='*55}")
+    print(f"\n{'='*64}")
+    print(f"  {name} — PER-EVENT detection + alert policy")
+    print(f"{'='*64}")
     print(f"  M+X events in test : {n_events}   (over {span_days:.1f} days)")
     print(f"  Window-level M+X   : {(lab_s>=3).sum()} windows")
-    print(f"\n  {'thr':>5} | {'events det.':>11} | {'event recall':>12} | {'false alarms':>12} | {'FA/day':>7}")
-    print(f"  {'-'*5}-+-{'-'*11}-+-{'-'*12}-+-{'-'*12}-+-{'-'*7}")
+    print(f"\n  {'thr':>5} {'persist':>7} | {'recall':>7} | {'FA/day':>7} | {'mean lead':>10}")
+    print(f"  {'-'*5}-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*10}")
 
     for thr in thresholds:
-        fire = mx_score >= thr
-        detected = 0
-        for g in groups:
-            lo, hi = g[0], g[-1]
-            if fire[lo:hi + 1].any():
-                detected += 1
-        # false-alarm clusters: contiguous QUIET firing runs
-        fa_clusters = 0
-        in_cluster = False
-        for k in range(len(lab_s)):
-            if quiet_mask[k] and fire[k]:
-                if not in_cluster:
-                    fa_clusters += 1
-                    in_cluster = True
-            else:
-                in_cluster = False
-        recall = detected / max(n_events, 1)
-        fa_per_day = fa_clusters / span_days
-        print(f"  {thr:5.2f} | {detected:>11} | {recall:>11.1%} | {fa_clusters:>12} | {fa_per_day:>7.1f}")
+        base_fire = mx_score >= thr
+        for k in persistence_levels:
+            fire = _apply_persistence(base_fire, k)
+            detected = 0
+            lead_secs: list[float] = []
+            for gi, g in enumerate(groups):
+                lo, hi = g[0], g[-1]
+                span_fire = fire[lo:hi + 1]
+                if span_fire.any():
+                    detected += 1
+                    first_local = int(np.argmax(span_fire))   # first True in span
+                    first_ts = ts_s[lo + first_local]
+                    lead = (onset_ts[gi] - first_ts) / np.timedelta64(1, "s")
+                    lead_secs.append(max(lead, 0.0))
+            # false-alarm clusters: contiguous QUIET firing runs
+            fa_clusters, in_cluster = 0, False
+            for idx in range(len(lab_s)):
+                if quiet_mask[idx] and fire[idx]:
+                    if not in_cluster:
+                        fa_clusters += 1; in_cluster = True
+                else:
+                    in_cluster = False
+            recall = detected / max(n_events, 1)
+            fa_per_day = fa_clusters / span_days
+            lead_str = f"{np.mean(lead_secs)/60:.1f} min" if lead_secs else "   —"
+            print(f"  {thr:5.2f} {k:>7} | {recall:>6.1%} | {fa_per_day:>7.1f} | {lead_str:>10}")
 
-    print(f"\n  (Event recall = fraction of M+X events with >=1 firing window during the event.\n"
-          f"   A flare caught even once = detected — operationally that triggers the alert.)")
+    print(f"\n  recall = events with >=1 alert during the event (one catch = detected).")
+    print(f"  persist = consecutive windows required to fire (hysteresis; cuts false alarms).")
+    print(f"  lead = mean time from first alert to flare onset proxy (event-span end).")
 
 
 def _report(name: str, probs: np.ndarray, labels: np.ndarray,
@@ -348,7 +377,11 @@ def main() -> None:
     parser.add_argument("--xgb-weight",  type=float, default=0.4)
     parser.add_argument("--event-level", action="store_true",
                         help="Also report per-EVENT detection metrics (operationally honest)")
+    parser.add_argument("--persistence", default="1,3,5",
+                        help="Comma-separated consecutive-window counts for the hysteresis "
+                             "alert policy in the per-event table (e.g. '1,3,5')")
     args = parser.parse_args()
+    persistence_levels = tuple(int(x) for x in str(args.persistence).split(",") if x.strip())
 
     test_pq = Path(args.dataset_dir) / f"{args.split}.parquet"
     if not test_pq.exists():
@@ -377,14 +410,14 @@ def main() -> None:
     tcn_probs = run_tcn(df)
     _report("DualStreamTCN", tcn_probs, labels, saved_threshold)
     if args.event_level:
-        _event_report("DualStreamTCN", tcn_probs, labels, window_ends, ev_thresholds)
+        _event_report("DualStreamTCN", tcn_probs, labels, window_ends, ev_thresholds, persistence_levels)
 
     # XGBoost
     xgb_probs = run_xgb(df)
     if xgb_probs is not None:
         _report("XGBoost", xgb_probs, labels)
         if args.event_level:
-            _event_report("XGBoost", xgb_probs, labels, window_ends, ev_thresholds)
+            _event_report("XGBoost", xgb_probs, labels, window_ends, ev_thresholds, persistence_levels)
 
         # Ensemble
         w_tcn = args.tcn_weight
@@ -393,7 +426,7 @@ def main() -> None:
         _report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})", ens_probs, labels, saved_threshold)
         if args.event_level:
             _event_report(f"Ensemble (TCN×{w_tcn} + XGB×{w_xgb})",
-                          ens_probs, labels, window_ends, ev_thresholds)
+                          ens_probs, labels, window_ends, ev_thresholds, persistence_levels)
 
     print("\nDone.")
 

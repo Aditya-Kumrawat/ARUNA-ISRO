@@ -113,6 +113,15 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
     model.eval()
     logger.info("TCN loaded from %s on %s", weights_path, device)
 
+    # Temperature scaling (Guo et al. 2017): if fit_temperature.py has produced a
+    # T, divide logits by it before softmax. Monotone → TSS/recall unchanged,
+    # only confidence/ECE improves.
+    temperature = 1.0
+    temp_path = _MODELS_DIR / "tcn_temperature.npy"
+    if temp_path.exists():
+        temperature = float(np.load(str(temp_path))[0])
+        logger.info("Applying temperature scaling T=%.4f", temperature)
+
     use_scaler = scaler is not None and getattr(scaler, 'n_features_in_', N_FEATURES_BASE) == N_FEATURES_BASE
 
     def _prepare_sample(row):
@@ -152,7 +161,7 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
         bs = torch.tensor(np.stack([p[2] for p in prepared]), dtype=torch.float32).to(device)
 
         with torch.no_grad():
-            logits = model(bt, bn, bs)
+            logits = model(bt, bn, bs) / temperature
             probs  = torch.softmax(logits, dim=1).cpu().numpy()
         all_probs.append(probs)
 

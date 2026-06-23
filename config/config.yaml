@@ -160,6 +160,20 @@ forecasting:
     coverage: 0.90                    # 90% conformal coverage
     alpha: 0.10
 
+  # Operational alert policy — SELECTED ON VALIDATION, frozen, reported on test.
+  # An M+X alert fires when P(M)+P(X) >= mx_threshold for `persistence_windows`
+  # consecutive frames (hysteresis suppresses isolated spikes). Selected at a
+  # val false-alarm budget of ~3/day, which maps to ~0.17/day on the test period
+  # (val is ~13× more false-alarm-prone than test). See select_operating_point.py.
+  alert_policy:
+    mx_threshold: 0.01                # P(M+X) decision threshold
+    persistence_windows: 10           # consecutive frames above threshold to fire
+    temperature: 1.9669               # post-hoc temperature scaling (fit on val, ECE≈0.02)
+    # Honest test performance at this policy (event-level, n=12 M+X events):
+    #   event_recall: 0.58  (7/12, 95% CI [0.25, 0.83])
+    #   false_alarms_per_day: 0.17
+    #   mean_lead_time_min: 23.7
+
   temporal_split:                     # STRICT — no random shuffling ever
     train_start: "2023-09-02"
     train_end:   "2024-06-30"

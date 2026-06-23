@@ -110,7 +110,9 @@ def _event_metrics(ts_s, lab_s, mx, phys_s, groups, span_days, thr, persist, use
 def main() -> None:
     parser = argparse.ArgumentParser(description="Select alert policy on val, report on test")
     parser.add_argument("--dataset-dir",    default="data/dataset")
-    parser.add_argument("--max-fa-per-day", type=float, default=1.0)
+    parser.add_argument("--max-fa-per-day", default="1.0",
+                        help="One budget, or comma-separated budgets to map the operating curve "
+                             "(e.g. '0.5,1,2,5'). Threshold is selected on val at each budget.")
     parser.add_argument("--persistence",    default="1,3,5,10")
     parser.add_argument("--physics-gate",   action="store_true",
                         help="Require rising thermal signature (dT/dt>0 or dEM/dt>0) for every alert")
@@ -119,57 +121,57 @@ def main() -> None:
 
     use_gate = args.physics_gate
     persist_levels = [int(x) for x in args.persistence.split(",") if x.strip()]
+    fa_budgets = [float(x) for x in str(args.max_fa_per_day).split(",") if x.strip()]
     thr_grid = np.round(np.arange(0.01, 1.00, 0.01), 2)
     print(f"Physics gate: {'ON (dT/dt>0 or dEM/dt>0)' if use_gate else 'OFF'}")
 
-    # ── 1. Select on VAL ────────────────────────────────────────────────────
-    val = pd.read_parquet(Path(args.dataset_dir) / "val.parquet")
+    # ── Run inference ONCE on each split, then sweep FA budgets ──────────────
+    val  = pd.read_parquet(Path(args.dataset_dir) / "val.parquet")
     print(f"VAL: {len(val)} windows — running TCN ...")
+    val_phys = _physics_ok(val) if use_gate else np.zeros(len(val), bool)
     v = _events_and_scores(run_tcn(val), val["label"].to_numpy(),
-                           val["window_end"].to_numpy(), _physics_ok(val))
+                           val["window_end"].to_numpy(), val_phys)
 
-    best = None  # (thr, persist, recall, fa, lead)
-    for p in persist_levels:
-        for thr in thr_grid:
-            rec, fa, _, lead = _event_metrics(*v, thr, p, use_gate)
-            if fa <= args.max_fa_per_day:
-                key = (rec, -fa, p)   # max recall, then fewer FA, then more persistence
-                if best is None or key > (best[2], -best[3], best[1]):
-                    best = (thr, p, rec, fa, lead)
-
-    if best is None:
-        print(f"\nNo operating point on val meets FA/day <= {args.max_fa_per_day}. "
-              f"Relax --max-fa-per-day or enable --physics-gate.")
-        return
-
-    thr, p, vrec, vfa, vlead = best
-    print(f"\nSelected on VAL  ->  threshold={thr:.2f}  persistence={p}")
-    print(f"   val: recall={vrec:.1%}  FA/day={vfa:.2f}  mean_lead={vlead:.1f} min")
-
-    # ── 2. Apply fixed policy to TEST ───────────────────────────────────────
     test = pd.read_parquet(Path(args.dataset_dir) / "test.parquet")
-    print(f"\nTEST: {len(test)} windows — running TCN ...")
+    print(f"TEST: {len(test)} windows — running TCN ...")
+    test_phys = _physics_ok(test) if use_gate else np.zeros(len(test), bool)
     t = _events_and_scores(run_tcn(test), test["label"].to_numpy(),
-                           test["window_end"].to_numpy(), _physics_ok(test))
-    rec, fa, detected, lead = _event_metrics(*t, thr, p, use_gate)
+                           test["window_end"].to_numpy(), test_phys)
 
-    n = len(detected)
-    lo = hi = 0.0
-    if n > 0:
-        rng = np.random.default_rng(42)
-        boots = [detected[rng.integers(0, n, n)].mean() for _ in range(args.n_boot)]
-        lo, hi = np.percentile(boots, [2.5, 97.5])
+    n_test = len(t[4])  # groups
+    rng = np.random.default_rng(42)
 
-    print("\n" + "=" * 62)
-    print("OPERATIONAL RESULT (policy fixed on val, measured on test)")
-    print("=" * 62)
-    print(f"  Policy          : P(M+X) >= {thr:.2f}, {p} consecutive windows"
-          + (", thermal rising" if use_gate else ""))
-    print(f"  Events detected : {int(detected.sum())}/{n}")
-    print(f"  Event recall    : {rec:.1%}   95% CI [{lo:.1%}, {hi:.1%}]  (bootstrap, n={n})")
-    print(f"  False alarms    : {fa:.2f}/day")
-    print(f"  Mean lead time  : {lead:.1f} min")
-    print("\nThis operating point was NOT tuned on test — it is the honest number to report.")
+    print("\n" + "=" * 78)
+    print("OPERATING CURVE — threshold selected on VAL at each FA budget, reported on TEST")
+    print("=" * 78)
+    print(f"  {'FA budget':>9} | {'thr':>4} {'pst':>3} | {'val rec':>7} {'val FA':>6} "
+          f"| {'TEST recall (95% CI)':>22} {'TEST FA':>7} {'lead':>6}")
+    print(f"  {'-'*9}-+-{'-'*4}-{'-'*3}-+-{'-'*7}-{'-'*6}-+-{'-'*22}-{'-'*7}-{'-'*6}")
+
+    for budget in fa_budgets:
+        best = None
+        for p in persist_levels:
+            for thr in thr_grid:
+                rec, fa, _, lead = _event_metrics(*v, thr, p, use_gate)
+                if fa <= budget:
+                    key = (rec, -fa, p)
+                    if best is None or key > (best[2], -best[3], best[1]):
+                        best = (thr, p, rec, fa, lead)
+        if best is None:
+            print(f"  {budget:>9.2f} | (no val operating point under this budget)")
+            continue
+        thr, p, vrec, vfa, _ = best
+        trec, tfa, detected, tlead = _event_metrics(*t, thr, p, use_gate)
+        lo = hi = 0.0
+        if n_test > 0:
+            boots = [detected[rng.integers(0, n_test, n_test)].mean() for _ in range(args.n_boot)]
+            lo, hi = np.percentile(boots, [2.5, 97.5])
+        ci = f"{trec:.0%} [{lo:.0%},{hi:.0%}] {int(detected.sum())}/{n_test}"
+        print(f"  {budget:>9.2f} | {thr:>4.2f} {p:>3} | {vrec:>6.0%} {vfa:>6.2f} "
+              f"| {ci:>22} {tfa:>7.2f} {tlead:>4.1f}m")
+
+    print("\n  Every threshold was selected on val (never test). Pick the operational")
+    print("  FA tolerance ISRO accepts; the TEST column is the honest expected performance.")
 
 
 if __name__ == "__main__":

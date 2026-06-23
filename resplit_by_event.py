@@ -106,25 +106,34 @@ for split_name in ("train", "val", "test"):
 
 # ── 6. Save: reload full parquets, filter by assigned indices, write ──────────
 
-print("\nSaving new splits (reloading full data) ...")
+import time as _time
+print("\nSaving new splits (reloading full data) ...", flush=True)
+print("  NOTE: each source file is reloaded in full; train.parquet (~1.2 GB)",
+      "takes 1-2 min to load with no output. This is normal — do not interrupt.",
+      flush=True)
 
 # Build a lookup: (source_split, source_idx) -> new_split
 meta["_key"] = meta["_source"] + "_" + meta["_source_idx"].astype(str)
 key_to_split = dict(zip(meta["_key"], meta["split"]))
 
 for src_split, src_path in full_paths.items():
-    print(f"  Processing {src_split}.parquet ...")
+    _t0 = _time.monotonic()
+    print(f"  [{src_split}] loading {src_path.name} ...", flush=True)
     full_df = pd.read_parquet(src_path)
+    print(f"  [{src_split}] loaded {len(full_df)} rows in {_time.monotonic()-_t0:.0f}s; "
+          f"assigning splits ...", flush=True)
     full_df["_key"] = src_split + "_" + np.arange(len(full_df)).astype(str)
     full_df["split"] = full_df["_key"].map(key_to_split)
 
     for new_split in ("train", "val", "test"):
         subset = full_df[full_df["split"] == new_split].drop(columns=["_key", "split"])
-        # Accumulate — we write after processing all source files
         out_path = DATA_DIR / f"_tmp_{new_split}_{src_split}.parquet"
         subset.to_parquet(out_path, index=False)
+    print(f"  [{src_split}] written to temp files "
+          f"({_time.monotonic()-_t0:.0f}s total)", flush=True)
+    del full_df  # free ~1.2 GB before loading the next source
 
-print("  Merging ...")
+print("  Merging temp files ...", flush=True)
 for new_split in ("train", "val", "test"):
     parts = []
     for src_split in full_paths:

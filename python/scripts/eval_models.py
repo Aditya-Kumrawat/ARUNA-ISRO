@@ -129,8 +129,13 @@ def run_tcn(df: pd.DataFrame, device_str: str = "cpu") -> np.ndarray:
         feats = feats.reshape(SEQUENCE_LENGTH, N_FEATURES_BASE)
         phases_int = np.frombuffer(row.phases_bytes, dtype=np.uint8)
 
+        # Replace float32 sentinel values (±max, written for missing HEL1OS data)
+        # before scaling to prevent NaN propagation through the network.
+        feats[np.abs(feats) > 1e30] = 0.0
+
         if use_scaler:
             feats = scaler.transform(feats).astype(np.float32)
+            feats = np.clip(feats, -30.0, 30.0)
 
         phase_onehot = np.zeros((SEQUENCE_LENGTH, 5), dtype=np.float32)
         for t in range(min(SEQUENCE_LENGTH, len(phases_int))):

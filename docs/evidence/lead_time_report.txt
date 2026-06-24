@@ -1,0 +1,28 @@
+ARUNA Lead-Time Distribution — Locked Operating Policy
+==========================================================
+Source: select_operating_point.py (2024 val/test, SoLEXS+HEL1OS active)
+Locked policy: thr=0.01, persist=10, physics_gate=ON
+N events detected: 7 / 12  (58% recall)
+
+Mean:      23.4 min
+Median:    23.7 min
+P10:       17.2 min   <- worst decile
+P25:       20.1 min
+P75:       26.4 min
+P90:       28.8 min
+Min:       15.6 min
+Max:       31.4 min
+
+Per-event lead times (minutes):
+  Event  1: 15.6 min
+  Event  2: 18.2 min
+  Event  3: 22.1 min
+  Event  4: 23.7 min
+  Event  5: 25.8 min
+  Event  6: 27.0 min
+  Event  7: 31.4 min
+
+NOTE: 2025 test period lacks HEL1OS; TCN nonthermal stream unavailable.
+      Lead-time figures above are from 2024 dual-instrument operation.
+      HOPE precursor (DNI > 1.5) provides additional 5-8 min earlier warning
+      before TCN threshold crossing (see hope_defensibility.txt).

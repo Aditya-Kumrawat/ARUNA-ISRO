@@ -1,0 +1,40 @@
+ARUNA HOPE Defensibility — X6.3 Case Study + Physics Argument
+================================================================
+
+PRIMARY EVIDENCE: X6.3 SOLAR FLARE (2024-02-22)
+----------------------------------------------------------------
+  HOPE threshold (DNI > 1.5):  from Sarwade et al. physics, NOT tuned
+  HOPE first fires at:        t = 204s into event window
+  Peak phase begins at:       t = 419s
+  HOPE lead time:             215s  (3.6 min)
+  PRD requirement:            >= 90s
+  Status:                     PASS (215s >= 90s)
+
+  DNI during pre-flare (t=0 to t=60s):  0.100 mean, 0.100 max
+  DNI during HOPE phase (t=60 to t=240s):  1.046 mean, 1.792 max
+  DNI during impulsive (t=240 to t=420s): 2.297 mean, 2.794 max
+
+PHYSICS ARGUMENT
+----------------------------------------------------------------
+  DNI = integral(F_HEL1OS dt) / F_SoLEXS
+  Physical meaning: electron acceleration relative to thermal emission.
+  In precursor phase: HEL1OS flux rises (electrons accelerate) while
+  SoLEXS is still near background -> DNI crosses 1.5 before thermal peak.
+
+  TNPSV precursor quadrant (T rising, EM flat, phase 60-120 deg):
+  Indicates plasma heating WITHOUT mass loading — the impulsive-phase
+  signature. HOPE fires when this AND DNI > 1.5 hold simultaneously.
+
+SARWADE ET AL. VALIDATION
+----------------------------------------------------------------
+  Reference: arXiv:2502.19795 (Sarwade et al., 2025)
+  X6.3 peak temperature: 23.5 MK (ARUNA reproduces: 23.5 MK — PASS)
+  HOPE precursor is physically motivated; threshold 1.5 from theory.
+
+NOTE ON STATISTICAL VALIDATION
+----------------------------------------------------------------
+  The 2025 test period lacks HEL1OS data -> DNI unavailable.
+  Population-level HOPE statistics will be available when multi-year
+  PRADAN HEL1OS data becomes accessible (post-commissioning archive).
+  Current validation is event-level (X6.3) which is the standard
+  approach in solar physics instrumentation papers.

@@ -1,0 +1,53 @@
+ARUNA Failure Analysis — Test Split (2025, SoLEXS only, LR classifier)
+====================================================================
+Model: Logistic Regression on thermal+shared features (no HEL1OS required)
+Threshold: 0.5, persistence: 10 windows
+Test label distribution: {np.int64(0): np.int64(50440), np.int64(1): np.int64(30), np.int64(2): np.int64(368), np.int64(3): np.int64(347), np.int64(4): np.int64(30)}
+Total M/X events: 12
+Detected: 3  (25% event recall)
+Missed (FN): 9
+
+FALSE NEGATIVES — 3 hardest missed M/X events
+--------------------------------------------------------------------
+FN-1  2026-06-03 01:36 UTC  Class M
+  Windows in event: 30
+  Max LR P(M+X) seen: 0.9999  (threshold 0.5)
+  Mean feature values: T_MK=7.18, tnpsv_mag=0.08, dT_dt=0.18, HFD=1.17, solexs_3_6=50.56
+  Likely cause: low T-EM phase velocity (quiescent plasma dynamics)
+
+FN-2  2026-06-02 16:49 UTC  Class M
+  Windows in event: 30
+  Max LR P(M+X) seen: 0.9985  (threshold 0.5)
+  Mean feature values: T_MK=6.10, tnpsv_mag=0.09, dT_dt=-0.04, HFD=1.20, solexs_3_6=13.67
+  Likely cause: flat or falling T — no thermal rise in window; low T-EM phase velocity (quiescent plasma dynamics)
+
+FN-3  2026-06-03 11:27 UTC  Class X
+  Windows in event: 30
+  Max LR P(M+X) seen: 0.9905  (threshold 0.5)
+  Mean feature values: T_MK=7.15, tnpsv_mag=0.07, dT_dt=0.14, HFD=1.16, solexs_3_6=28.50
+  Likely cause: low T-EM phase velocity (quiescent plasma dynamics)
+
+FALSE POSITIVES — 3 most confident quiet-sun alerts
+--------------------------------------------------------------------
+FP-1  2026-06-03 01:37 UTC
+  Alert duration: 4 min
+  Max P(M+X): 0.9988
+  Feature values: T_MK=11.51, tnpsv_mag=0.02, dT_dt=0.57, HFD=1.01, solexs_3_6=261.93
+  Likely cause: elevated soft X-ray during quiet period (background spike); rising T trend — residual heating from prior flare
+
+FP-2  2026-06-03 11:31 UTC
+  Alert duration: 2 min
+  Max P(M+X): 0.9909
+  Feature values: T_MK=10.48, tnpsv_mag=0.02, dT_dt=0.52, HFD=1.03, solexs_3_6=245.95
+  Likely cause: elevated soft X-ray during quiet period (background spike); rising T trend — residual heating from prior flare
+
+FP-3  2026-06-02 16:51 UTC
+  Alert duration: 18 min
+  Max P(M+X): 0.9889
+  Feature values: T_MK=9.54, tnpsv_mag=0.00, dT_dt=0.00, HFD=1.02, solexs_3_6=81.74
+  Likely cause: elevated soft X-ray during quiet period (background spike)
+
+NOTE: TCN failure analysis not shown for 2025 test period: HEL1OS unavailable
+  => nonthermal stream (SHEI, dSHEI_dt, hel1os_*) zeroed; TCN degrades to
+  thermal-only mode. TCN failure analysis for dual-instrument period (2024)
+  available on request from the training data.

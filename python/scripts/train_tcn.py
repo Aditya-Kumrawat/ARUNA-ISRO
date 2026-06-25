@@ -68,7 +68,8 @@ class SolarFlareDataset:
       label           — int 0-4
     """
 
-    def __init__(self, parquet_path: str, scaler=None) -> None:
+    def __init__(self, parquet_path: str, scaler=None, augment: bool = False,
+                 noise_std: float = 0.04, jitter_frames: int = 30) -> None:
         import torch
         self._torch = torch
         self._df = pd.read_parquet(parquet_path)
@@ -82,6 +83,9 @@ class SolarFlareDataset:
             )
             scaler = None
         self._scaler = scaler
+        self._augment = augment
+        self._noise_std = noise_std
+        self._jitter_frames = jitter_frames
 
     def __len__(self) -> int:
         return len(self._df)
@@ -93,6 +97,20 @@ class SolarFlareDataset:
         # Decode feature bytes → (T, N_FEATURES_BASE)
         feats = np.frombuffer(row["features_bytes"], dtype=np.float32).copy()
         feats = feats.reshape(SEQUENCE_LENGTH, N_FEATURES_BASE)
+
+        # Augmentation (train only) — time jitter + Gaussian noise
+        # Jitter: randomly drop up to jitter_frames from the front, re-pad with zeros
+        # Noise: additive Gaussian (std=noise_std of the feature std-dev, post-scaling)
+        if self._augment:
+            if self._jitter_frames > 0:
+                jitter = np.random.randint(0, self._jitter_frames + 1)
+                if jitter > 0:
+                    feats = np.concatenate(
+                        [np.zeros((jitter, N_FEATURES_BASE), dtype=np.float32),
+                         feats[:-jitter]], axis=0
+                    )
+            if self._noise_std > 0.0:
+                feats = feats + np.random.normal(0, self._noise_std, feats.shape).astype(np.float32)
 
         # Decode phase bytes → (T,) uint8 integers (0=QUIET..4=DECAY) → one-hot (T, 5)
         # build_dataset.py stores phases as uint8 ints, one byte per timestep.
@@ -239,9 +257,11 @@ def train(
         sys.exit(1)
 
     logger.info("Train parquet: %s", train_pq)
-    train_ds = SolarFlareDataset(str(train_pq), scaler)
-    val_ds   = SolarFlareDataset(str(val_pq),   scaler)
-    logger.info("Train windows: %d  |  Val windows: %d", len(train_ds), len(val_ds))
+    train_ds = SolarFlareDataset(str(train_pq), scaler, augment=True,
+                                 noise_std=0.04, jitter_frames=30)
+    val_ds   = SolarFlareDataset(str(val_pq),   scaler, augment=False)
+    logger.info("Train windows: %d  |  Val windows: %d (augmentation ON for train)",
+                len(train_ds), len(val_ds))
 
     # The WeightedRandomSampler class weights [1,3,5,10,20] were tuned for the RAW
     # 12.7:1 imbalanced parquet. If the training parquet is already physically
@@ -276,9 +296,16 @@ def train(
         logger.info("Resumed from existing checkpoint %s", tcn_out)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=lr * 0.01
-    )
+    # Warmup: linear ramp for warmup_epochs, then cosine decay to lr*0.01
+    # Warmup prevents the aggressive LR from collapsing to a shallow local minimum
+    # in the first epoch (responsible for the epoch-2 peak + degradation pattern).
+    warmup_epochs = 5
+    def _lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs
+        progress = (epoch - warmup_epochs) / max(1, epochs - warmup_epochs)
+        return 0.01 + 0.5 * (1.0 - 0.01) * (1.0 + np.cos(np.pi * progress))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
     Path(tcn_out).parent.mkdir(parents=True, exist_ok=True)
     log_path = Path(tcn_out).parent / "training_log.csv"
@@ -296,8 +323,8 @@ def train(
             "Evaluate real flare skill on the test set after training."
         )
 
-    best_score = -999.0   # val_tss when val has flares; -val_loss otherwise
-    patience   = 15       # slightly larger to compensate for loss-based stopping
+    best_score = -999.0   # val_tss_opt when val has flares; -val_loss otherwise
+    patience   = 25       # increased: warmup uses 5 epochs before cosine kicks in
     no_improve = 0
 
     with open(log_path, "w", newline="") as csvfile:
@@ -352,27 +379,56 @@ def train(
             all_probs_np = np.concatenate(all_probs, axis=0)
             all_labels_np = np.array(all_labels)
 
-            val_tss = _compute_tss(all_probs_np, all_labels_np)
+            # TSS at fixed 0.5 (for logging) AND at the sweep-optimal threshold
+            val_tss = _compute_tss(all_probs_np, all_labels_np, threshold=0.5)
             val_ece = _compute_ece(all_probs_np, all_labels_np)
             cur_lr  = scheduler.get_last_lr()[0]
             elapsed = time.monotonic() - t0
 
+            # Find optimal threshold for M+X on val — use this for checkpointing
+            # so we don't lock to a model that peaked at threshold=0.5 but collapses
+            # at the operational threshold of ~0.01.
+            if val_has_flares:
+                best_ep_th, best_ep_tss = 0.5, val_tss
+                for _th in np.arange(0.02, 0.98, 0.02):
+                    _tss = _compute_tss(all_probs_np, all_labels_np, threshold=float(_th))
+                    if _tss > best_ep_tss:
+                        best_ep_tss = _tss
+                        best_ep_th  = float(_th)
+                val_tss_opt = best_ep_tss
+            else:
+                val_tss_opt = val_tss
+                best_ep_th  = 0.5
+
             logger.info(
-                "Epoch %3d/%d  loss=%.4f  val_loss=%.4f  TSS=%.4f  ECE=%.4f  lr=%.2e  %.1fs",
-                epoch, epochs, train_loss, val_loss, val_tss, val_ece, cur_lr, elapsed,
+                "Epoch %3d/%d  loss=%.4f  val_loss=%.4f  TSS@0.5=%.4f  TSS_opt=%.4f(th=%.2f)"
+                "  ECE=%.4f  lr=%.2e  %.1fs",
+                epoch, epochs, train_loss, val_loss, val_tss, val_tss_opt, best_ep_th,
+                val_ece, cur_lr, elapsed,
             )
             writer.writerow([epoch, f"{train_loss:.6f}", f"{val_loss:.6f}",
                              f"{val_tss:.4f}", f"{val_ece:.4f}", f"{cur_lr:.2e}"])
             csvfile.flush()
 
             # ── Checkpoint ────────────────────────────────────────────────────
-            epoch_score = val_tss if val_has_flares else -val_loss
+            epoch_score = val_tss_opt if val_has_flares else -val_loss
             if epoch_score > best_score:
                 best_score = epoch_score
                 no_improve = 0
+                # Save state_dict + metadata so we can always reconstruct what epoch
+                # and threshold this checkpoint belongs to
+                torch.save({
+                    "model_state": model.state_dict(),
+                    "epoch": epoch,
+                    "val_tss": float(val_tss_opt),
+                    "val_ece": float(val_ece),
+                    "best_threshold": float(best_ep_th),
+                }, tcn_out + ".ckpt")
+                # Also save bare state_dict for backward-compatible load_tcn()
                 torch.save(model.state_dict(), tcn_out)
                 if val_has_flares:
-                    logger.info("  → New best TSS=%.4f — saved %s", best_score, tcn_out)
+                    logger.info("  → New best TSS_opt=%.4f (th=%.2f) — saved %s",
+                                best_score, best_ep_th, tcn_out)
                 else:
                     logger.info("  → New best val_loss=%.4f — saved %s", val_loss, tcn_out)
             else:
@@ -439,6 +495,40 @@ def train(
 
         if ece_final > 0.05:
             logger.warning("ECE %.4f exceeds PRD target 0.05", ece_final)
+
+        # Temperature scaling — fit T on val logits so ECE < 0.03 at deployment
+        logger.info("Fitting temperature scaling on validation logits ...")
+        try:
+            from scipy.optimize import minimize_scalar
+
+            # Gather raw logits from val (not softmax probs)
+            logits_list: list[np.ndarray] = []
+            with torch.no_grad():
+                for x_th, x_nth, x_sh, _, _ in DataLoader(val_ds, batch_size=batch_size):
+                    raw = model(x_th.to(device), x_nth.to(device), x_sh.to(device))
+                    logits_list.append(raw.cpu().numpy())
+            val_logits_np = np.concatenate(logits_list, axis=0)
+
+            def nll(T):
+                T = max(T, 1e-3)
+                scaled = val_logits_np / T
+                exp_ = np.exp(scaled - scaled.max(axis=1, keepdims=True))
+                probs_ = exp_ / exp_.sum(axis=1, keepdims=True)
+                log_p = np.log(probs_[np.arange(len(val_labels_np)), val_labels_np] + 1e-9)
+                return -log_p.mean()
+
+            res = minimize_scalar(nll, bounds=(0.3, 5.0), method="bounded")
+            best_temp = float(res.x)
+            np.save(Path(tcn_out).with_suffix(".temperature.npy"), np.array([best_temp]))
+            ece_calibrated = _compute_ece(
+                np.exp(val_logits_np / best_temp - (val_logits_np / best_temp).max(axis=1, keepdims=True)) /
+                np.exp(val_logits_np / best_temp - (val_logits_np / best_temp).max(axis=1, keepdims=True)).sum(axis=1, keepdims=True),
+                val_labels_np,
+            )
+            logger.info("Temperature=%.4f → calibrated ECE=%.4f → saved models/tcn_v1.temperature.npy",
+                        best_temp, ece_calibrated)
+        except Exception as te:
+            logger.warning("Temperature scaling failed: %s", te)
 
     except Exception as exc:
         logger.warning("MAPIE calibration skipped: %s", exc)

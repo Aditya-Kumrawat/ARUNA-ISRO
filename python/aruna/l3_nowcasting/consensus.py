@@ -38,6 +38,7 @@ class ConsensusEngine:
         self._prev_flux: float = 0.0
         self._current_event_id: Optional[str] = None
         self._sol_only_fired: bool = False
+        self._hel_only_fired: bool = False
 
     # ── public ──────────────────────────────────────────────────────────────
 
@@ -143,6 +144,20 @@ class ConsensusEngine:
                 instruments=["SOLEXS"],
                 flare_type="STANDARD",
             )
+        # B2 fix: HEL1OS_ONLY degraded mode — symmetric to SOLEXS_ONLY
+        if hel_t and not sol_t and not self._hel_only_fired:
+            self._hel_only_fired = True
+            return self._make_event(
+                "FLARE_ONSET",
+                ts,
+                frame,
+                flux_sol,
+                flux_hel,
+                detection_method="HEL1OS_ONLY",
+                confidence=0.5,
+                instruments=["HEL1OS"],
+                flare_type="STANDARD",
+            )
         if hope_flag and self._hope_time is None:
             self._hope_time = ts
             self._state = "HOPE"
@@ -178,7 +193,7 @@ class ConsensusEngine:
             self._hel_trigger_time = ts
         if self._dual_trigger_met(ts):
             return self._transition_to_onset(frame, flux_sol, flux_hel, ts)
-        # SOLEXS_ONLY degraded mode: emit advisory when sol_triggered but hel_triggered=False
+        # SOLEXS_ONLY degraded mode
         if sol_t and not hel_t and not self._sol_only_fired:
             self._sol_only_fired = True
             return self._make_event(
@@ -190,6 +205,20 @@ class ConsensusEngine:
                 detection_method="SOLEXS_ONLY",
                 confidence=0.5,
                 instruments=["SOLEXS"],
+                flare_type="STANDARD",
+            )
+        # B2 fix: HEL1OS_ONLY degraded mode
+        if hel_t and not sol_t and not self._hel_only_fired:
+            self._hel_only_fired = True
+            return self._make_event(
+                "FLARE_ONSET",
+                ts,
+                frame,
+                flux_sol,
+                flux_hel,
+                detection_method="HEL1OS_ONLY",
+                confidence=0.5,
+                instruments=["HEL1OS"],
                 flare_type="STANDARD",
             )
         return None
@@ -313,6 +342,7 @@ class ConsensusEngine:
         self._sol_trigger_time = None
         self._hel_trigger_time = None
         self._sol_only_fired = False
+        self._hel_only_fired = False
         if self._current_event_id is None:
             self._current_event_id = str(uuid.uuid4())
         lead_time = (
@@ -348,6 +378,7 @@ class ConsensusEngine:
         self._peak_flux = 0.0
         self._onset_wall_time = None
         self._sol_only_fired = False
+        self._hel_only_fired = False
         event = self._make_event(
             "FLARE_END",
             ts,

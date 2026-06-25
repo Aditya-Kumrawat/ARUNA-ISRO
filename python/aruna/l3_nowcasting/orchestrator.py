@@ -63,10 +63,14 @@ class NowcastOrchestrator:
         )
         self._consensus = ConsensusEngine(self._cfg)
         self._catalog = CatalogService(self._cfg.db_url)
+        self._epoch_time = None  # B4: set on first frame for real-timestamp t_sec
 
     def process(self, frame: PhysicsFrame) -> Optional[NowcastEvent]:
         self._frame_count += 1
-        t_sec = self._frame_count
+        # B4 fix: use real frame timestamp for baseline timing instead of frame counter
+        if self._epoch_time is None:
+            self._epoch_time = frame.timestamp
+        t_sec = int((frame.timestamp - self._epoch_time).total_seconds()) + 1
 
         flux_sol = frame.solexs_3_6kev + frame.solexs_6_10kev
         flux_hel = frame.hel1os_10_25kev + frame.hel1os_25_50kev + frame.hel1os_50_70kev
@@ -75,18 +79,22 @@ class NowcastOrchestrator:
         _, hel_threshold = self._hel_baseline.update(flux_hel, t_sec)
 
         sol_cp = self._sol_cp.update(flux_sol)
-        self._hel_cp.update(flux_hel)  # advances internal buffer; SHEI hardening is the HEL trigger proxy
+        # B3 fix: use HEL changepoint as a true independent trigger (not just SHEI proxy)
+        hel_cp = self._hel_cp.update(flux_hel)
 
         sol_triggered = (
             sol_threshold is not None
             and flux_sol > sol_threshold
             and sol_cp is not None
         )
+        # B3 fix: HEL trigger uses changepoint detection AND SHEI hardening
         hel_triggered = (
             hel_threshold is not None
             and flux_hel > hel_threshold
-            and frame.dSHEI_dt > 0.0
-            and frame.SHEI > -1.0
+            and (
+                hel_cp is not None  # true changepoint
+                or (frame.dSHEI_dt > 0.0 and frame.SHEI > -1.0)  # SHEI proxy fallback
+            )
         )
 
         event = self._consensus.ingest(

@@ -23,6 +23,7 @@ GOES_CLASSES = frozenset({"A", "B", "C", "M", "X", "SUB_A"})
 DETECTION_METHODS = frozenset({
     "DUAL_TRIGGER",
     "SOLEXS_ONLY",       # degraded — HEL1OS offline
+    "HEL1OS_ONLY",       # degraded — SoLEXS offline (B2 fix)
     "HOPE",              # precursor only, awaiting confirmation
     "SEP_EVENT",         # particle event, not a flare
 })

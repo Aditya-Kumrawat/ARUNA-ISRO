@@ -269,12 +269,19 @@ class TestConsensusEngine:
         assert event.detection_method == "DUAL_TRIGGER"
 
     def test_dual_trigger_outside_window_no_onset(self):
+        # Dual triggers 200s apart (> 180s window) must not produce a confirmed DUAL_TRIGGER onset.
+        # B2: HEL1OS_ONLY advisory may fire on the second call — that is expected and correct.
         engine = self._engine(dual_trigger_window_sec=180)
         engine.ingest(True, False, False, None,
                       _make_physics_frame(timestamp=self._ts(0)), 5000.0, 100.0)
         event = engine.ingest(False, True, False, None,
                                _make_physics_frame(timestamp=self._ts(200)), 5000.0, 500.0)
-        assert event is None
+        # No confirmed DUAL_TRIGGER onset — either None or a degraded advisory is acceptable
+        if event is not None:
+            assert event.detection_method != "DUAL_TRIGGER", (
+                "Window violation: DUAL_TRIGGER onset fired with triggers 200s apart "
+                f"(window=180s); got detection_method={event.detection_method}"
+            )
 
     def test_full_lifecycle_quiet_hope_onset_peak_end(self):
         engine = self._engine(dual_trigger_window_sec=180, peak_decay_threshold=0.5)

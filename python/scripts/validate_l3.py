@@ -495,6 +495,32 @@ def format_confusion_text(confusion: Dict) -> str:
 
 # ── Main run logic ─────────────────────────────────────────────────────────────
 
+def _build_active_mask(arrays: dict, n: int, quiet_stride: int = 60) -> np.ndarray:
+    """
+    Fast-mode mask: process every frame near flux rises, sample every
+    `quiet_stride` frames during deep-quiet periods.
+    A frame is "active" if either sol or hel flux is above 20% of its
+    overall median, OR if it falls within a quiet_stride sample window.
+    """
+    sol = arrays["solexs_3_6kev"] + arrays["solexs_6_10kev"]
+    hel = arrays["hel1os_10_25kev"] + arrays["hel1os_25_50kev"]
+    sol_med = float(np.median(sol[sol > 0])) if np.any(sol > 0) else 1.0
+    hel_med = float(np.median(hel[hel > 0])) if np.any(hel > 0) else 1.0
+    # Mark frames where flux is elevated (potential event) or it's a periodic sample
+    elevated = (sol > 0.2 * sol_med) | (hel > 0.2 * hel_med)
+    # Dilate: include ±300 frames (5 min) around every elevated frame
+    from scipy.ndimage import binary_dilation
+    struct = np.ones(601, dtype=bool)
+    elevated = binary_dilation(elevated, structure=struct)
+    # Always keep every quiet_stride-th frame for baseline maintenance
+    sample = np.zeros(n, dtype=bool)
+    sample[::quiet_stride] = True
+    mask = elevated | sample
+    logger.info("Fast mode: %d / %d frames active (%.1f%%)",
+                mask.sum(), n, 100 * mask.sum() / n)
+    return mask
+
+
 def run_validation(
     physics_df: pd.DataFrame,
     goes_df: pd.DataFrame,
@@ -503,8 +529,9 @@ def run_validation(
     zero_hel: bool = False,
     zero_sol: bool = False,
     calibrate: bool = False,
+    fast: bool = True,
 ) -> Dict:
-    logger.info("Starting L3 validation — mode=%s", mode)
+    logger.info("Starting L3 validation — mode=%s fast=%s", mode, fast)
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg = NowcastConfig(db_url=f"sqlite:///{out_dir / 'catalog.db'}")
     orchestrator = NowcastOrchestrator(config=cfg, kafka_producer=None)
@@ -516,11 +543,15 @@ def run_validation(
     logger.info("Pre-extracting %d frames into numpy arrays ...", n_frames)
     arrays = _pre_extract(physics_df, ts_col)
     ts_raw = arrays["__ts__"]
-    logger.info("Streaming frames through L3 orchestrator ...")
 
-    for i in range(n_frames):
-        if i % 100000 == 0 and i > 0:
-            logger.info("  Frame %d / %d (%.0f%%)", i, n_frames, 100 * i / n_frames)
+    active = _build_active_mask(arrays, n_frames) if fast else np.ones(n_frames, dtype=bool)
+    active_indices = np.where(active)[0]
+    logger.info("Streaming %d frames through L3 orchestrator ...", len(active_indices))
+
+    for count, i in enumerate(active_indices):
+        if count % 100000 == 0 and count > 0:
+            logger.info("  Frame %d / %d (%.0f%%)", count, len(active_indices),
+                        100 * count / len(active_indices))
         try:
             ts = _ts_to_dt(ts_raw[i])
             frame = _frame_from_arrays(arrays, i, ts)
@@ -646,11 +677,14 @@ def parse_args():
                    help="Fit B1 calibration factor from matched events")
     p.add_argument("--all-modes", action="store_true",
                    help="Run full + zero-hel + zero-sol in sequence and compare")
+    p.add_argument("--no-fast", action="store_true",
+                   help="Disable fast mode (process all 8M frames, slow but exact)")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    fast = not args.no_fast
 
     if not args.physics_cache.exists():
         logger.error("Physics cache not found: %s", args.physics_cache)
@@ -675,7 +709,8 @@ def main():
         ]:
             out = args.out / mode
             m = run_validation(physics_df, goes_df, out, mode=mode,
-                               zero_hel=zh, zero_sol=zs, calibrate=args.calibrate)
+                               zero_hel=zh, zero_sol=zs, calibrate=args.calibrate,
+                               fast=fast)
             results[mode] = m
 
         print("\n" + "=" * 60)
@@ -696,7 +731,7 @@ def main():
                "zero_solexs" if args.zero_solexs else "full"
         run_validation(physics_df, goes_df, args.out, mode=mode,
                        zero_hel=args.zero_hel1os, zero_sol=args.zero_solexs,
-                       calibrate=args.calibrate)
+                       calibrate=args.calibrate, fast=fast)
 
 
 if __name__ == "__main__":

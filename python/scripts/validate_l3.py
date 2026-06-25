@@ -77,7 +77,7 @@ def _safe_float(v, default: float = 0.0) -> float:
 
 
 def row_to_physics_frame(row) -> PhysicsFrame:
-    """Convert one physics_cache parquet row to a PhysicsFrame."""
+    """Convert one physics_cache parquet row to a PhysicsFrame (used for single-row fallback)."""
     ts_raw = row.get("timestamp") or row.get("time") or row.get("datetime")
     if ts_raw is None:
         raise ValueError("No timestamp column found in physics_cache row")
@@ -134,6 +134,97 @@ def row_to_physics_frame(row) -> PhysicsFrame:
         suit_uv_flux=_safe_float(row.get("suit_uv_flux", 0.0)),
         suit_uv_brightening_rate=_safe_float(row.get("suit_uv_brightening_rate", 0.0)),
         tnci=_safe_float(row.get("tnci", 0.0)),
+    )
+
+
+_FLOAT_COLS = [
+    "T_MK", "T_uncertainty_MK", "EM_cm3", "EM_uncertainty", "fit_chi_squared",
+    "DNI", "tnpsv_magnitude", "tnpsv_angle_rad", "SHEI", "dSHEI_dt", "HFD",
+    "FeKa_flux", "dT_dt", "dEM_dt", "d2T_dt2",
+    "solexs_3_6kev", "solexs_6_10kev",
+    "hel1os_10_25kev", "hel1os_25_50kev", "hel1os_50_70kev",
+    "suit_uv_flux", "suit_uv_brightening_rate", "tnci",
+]
+_SHEI_DEFAULT = -2.0
+
+
+def _pre_extract(df: pd.DataFrame, ts_col: str) -> dict:
+    """Pre-extract all columns as numpy arrays to avoid per-row pandas overhead."""
+    n = len(df)
+    arrays: dict = {"__ts__": df[ts_col].to_numpy()}
+    for col in _FLOAT_COLS:
+        if col in df.columns:
+            arr = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=np.float64)
+            default = _SHEI_DEFAULT if col == "SHEI" else 0.0
+            np.nan_to_num(arr, nan=default, copy=False)
+        else:
+            default = _SHEI_DEFAULT if col == "SHEI" else 0.0
+            arr = np.full(n, default, dtype=np.float64)
+        arrays[col] = arr
+    arrays["flare_phase"] = (
+        df["flare_phase"].to_numpy(dtype=object)
+        if "flare_phase" in df.columns
+        else np.full(n, "QUIET", dtype=object)
+    )
+    arrays["hope_flag"] = (
+        df["hope_flag"].fillna(False).to_numpy(dtype=bool)
+        if "hope_flag" in df.columns
+        else np.zeros(n, dtype=bool)
+    )
+    return arrays
+
+
+def _ts_to_dt(ts_raw) -> datetime:
+    if hasattr(ts_raw, "to_pydatetime"):
+        dt = ts_raw.to_pydatetime()
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    if isinstance(ts_raw, (int, float)):
+        return datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+    if isinstance(ts_raw, str):
+        return datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+    dt = ts_raw
+    return dt if (hasattr(dt, "tzinfo") and dt.tzinfo is not None) else dt.replace(tzinfo=timezone.utc)
+
+
+def _frame_from_arrays(arrays: dict, i: int, ts: datetime) -> PhysicsFrame:
+    return PhysicsFrame(
+        frame_id=str(i),
+        timestamp=ts,
+        source_frame_ids=[],
+        T_MK=float(arrays["T_MK"][i]),
+        T_uncertainty_MK=float(arrays["T_uncertainty_MK"][i]),
+        EM_cm3=float(arrays["EM_cm3"][i]),
+        EM_uncertainty=float(arrays["EM_uncertainty"][i]),
+        fit_chi_squared=float(arrays["fit_chi_squared"][i]),
+        DNI=float(arrays["DNI"][i]),
+        tnpsv_magnitude=float(arrays["tnpsv_magnitude"][i]),
+        tnpsv_angle_rad=float(arrays["tnpsv_angle_rad"][i]),
+        SHEI=float(arrays["SHEI"][i]),
+        dSHEI_dt=float(arrays["dSHEI_dt"][i]),
+        HFD=float(arrays["HFD"][i]),
+        QPP_period_sec=None,
+        QPP_amplitude=None,
+        FeKa_flux=float(arrays["FeKa_flux"][i]),
+        flare_phase=str(arrays["flare_phase"][i]),
+        hope_flag=bool(arrays["hope_flag"][i]),
+        hope_lead_time_sec=None,
+        hope_reason=None,
+        engine_state="ACTIVE",
+        data_quality_flag=QualityFlag.GOOD,
+        physics_quality_flag=PhysicsQuality.FIT_OK,
+        fit_backend="cached",
+        pipeline_version="2.0.0",
+        dT_dt=float(arrays["dT_dt"][i]),
+        dEM_dt=float(arrays["dEM_dt"][i]),
+        d2T_dt2=float(arrays["d2T_dt2"][i]),
+        solexs_3_6kev=float(arrays["solexs_3_6kev"][i]),
+        solexs_6_10kev=float(arrays["solexs_6_10kev"][i]),
+        hel1os_10_25kev=float(arrays["hel1os_10_25kev"][i]),
+        hel1os_25_50kev=float(arrays["hel1os_25_50kev"][i]),
+        hel1os_50_70kev=float(arrays["hel1os_50_70kev"][i]),
+        suit_uv_flux=float(arrays["suit_uv_flux"][i]),
+        suit_uv_brightening_rate=float(arrays["suit_uv_brightening_rate"][i]),
+        tnci=float(arrays["tnci"][i]),
     )
 
 
@@ -422,15 +513,22 @@ def run_validation(
     all_events: List[NowcastEvent] = []
     n_frames = len(physics_df)
 
-    for i, (_, row) in enumerate(physics_df.iterrows()):
-        if i % 50000 == 0:
+    logger.info("Pre-extracting %d frames into numpy arrays ...", n_frames)
+    arrays = _pre_extract(physics_df, ts_col)
+    ts_raw = arrays["__ts__"]
+    logger.info("Streaming frames through L3 orchestrator ...")
+
+    for i in range(n_frames):
+        if i % 100000 == 0 and i > 0:
             logger.info("  Frame %d / %d (%.0f%%)", i, n_frames, 100 * i / n_frames)
         try:
-            frame = row_to_physics_frame(row)
+            ts = _ts_to_dt(ts_raw[i])
+            frame = _frame_from_arrays(arrays, i, ts)
         except Exception as e:
             logger.debug("Skipping row %d: %s", i, e)
             continue
-        frame = apply_zero_mode(frame, zero_hel, zero_sol)
+        if zero_hel or zero_sol:
+            frame = apply_zero_mode(frame, zero_hel, zero_sol)
         event = orchestrator.process(frame)
         if event is not None:
             all_events.append(event)

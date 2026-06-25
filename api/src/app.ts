@@ -14,6 +14,9 @@ import validation from './routes/validation.js'
 import replay from './routes/replay.js'
 import bulletin from './routes/bulletin.js'
 import gaganyaan from './routes/gaganyaan.js'
+import configRoutes from './routes/config.js'
+import decisionRoutes from './routes/decision.js'
+import missionEventsRoutes from './routes/missionEvents.js'
 
 const API_PREFIX = '/api/v1'
 
@@ -52,6 +55,9 @@ export async function buildApp() {
   await app.register(replay, { prefix: API_PREFIX })
   await app.register(bulletin, { prefix: API_PREFIX })
   await app.register(gaganyaan, { prefix: API_PREFIX })
+  await app.register(configRoutes, { prefix: API_PREFIX })
+  await app.register(decisionRoutes, { prefix: API_PREFIX })
+  await app.register(missionEventsRoutes, { prefix: API_PREFIX })
 
   // Root redirect to health
   app.get('/', async (_, reply) => reply.redirect('/api/v1/health'))

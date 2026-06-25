@@ -82,6 +82,33 @@ function makeQuietThreat(): ThreatOutput {
 
 // --- Store ---
 
+export interface MissionEvent {
+  id: string;
+  timestamp: string;
+  event_type: string;
+  label: string;
+  detail: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+}
+
+export interface DecisionSnapshot {
+  recommendation: string;
+  confidence: number;
+  actions: string[];
+  affected_assets: string[];
+  mission_brief: string;
+  valid_until: string;
+  reasoning: {
+    physics_evidence: string[];
+    trigger_chain: string[];
+    confidence_contributors: Record<string, number>;
+    analog_match: string;
+    physics_consistency: string;
+    mission_impact_summary: string;
+  };
+  updated_at: string;
+}
+
 interface AppStore {
   physics: PhysicsFrame
   physicsHistory: PhysicsFrame[]
@@ -95,6 +122,8 @@ interface AppStore {
   recentAlerts: FlareEvent[]
   replayActive: boolean
   replayEventId: string | null
+  decisionFrame: DecisionSnapshot | null
+  missionEvents: MissionEvent[]
 }
 
 const store: AppStore = {
@@ -110,10 +139,21 @@ const store: AppStore = {
   recentAlerts: [],
   replayActive: false,
   replayEventId: null,
+  decisionFrame: null,
+  missionEvents: [],
 }
 
 export function getStore(): Readonly<AppStore> {
   return store
+}
+
+export function setDecisionFrame(d: DecisionSnapshot): void {
+  store.decisionFrame = d
+}
+
+export function pushMissionEvent(event: Omit<MissionEvent, 'id'>): void {
+  const full: MissionEvent = { id: crypto.randomUUID(), ...event };
+  store.missionEvents = [full, ...store.missionEvents].slice(0, 500);
 }
 
 export function pushPhysicsFrame(frame: PhysicsFrame): void {

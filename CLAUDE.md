@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Design Work — MANDATORY
+
+Before writing any UI code, designing any component, choosing any color, writing any dashboard copy, or making any visual decision: **read `design.md` completely**. It is the single source of truth for ARUNA™ brand, colors, typography, motion, copy voice, and what data ARUNA can and cannot show.
+
 ## What This Is
 
 ARUNA (Aditya-L1 Real-time Unified Nowcasting & Alert System) is a physics-grounded solar flare detection and forecasting pipeline built for ISRO's Aditya-L1 satellite instruments (SoLEXS soft X-ray + HEL1OS hard X-ray). The full specification is in `ARUNA_Pipeline_PRD.md`. Implementation is for BAH 2026 Problem Statement 15.

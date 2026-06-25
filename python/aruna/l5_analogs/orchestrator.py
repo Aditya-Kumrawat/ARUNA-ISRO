@@ -10,7 +10,7 @@ import numpy as np
 from aruna.models.forecast import ForecastFrame
 from aruna.models.physics import PhysicsFrame
 from aruna.l5_analogs.models import AnalogMatch, NO_ANALOG
-from aruna.l5_analogs.index import AnalogIndex
+from aruna.l5_analogs.index import AnalogIndex, _DEFAULT_DB_URL, _DEFAULT_INDEX_PATH
 from aruna.l5_analogs.dtw import compute_dtw_distance
 
 logger = logging.getLogger(__name__)
@@ -24,8 +24,8 @@ class AnalogOrchestrator:
     """
     def __init__(
         self,
-        db_url: str = "sqlite:///aruna_catalog.db",
-        index_path: str = "models/faiss_analog.index",
+        db_url: str = _DEFAULT_DB_URL,
+        index_path: str = _DEFAULT_INDEX_PATH,
         top_k_faiss: int = 10,
         top_k_return: int = 3,
         no_analog_sigma: float = 3.0,
@@ -80,20 +80,32 @@ class AnalogOrchestrator:
 
         # 3. Construct 4-D query timeseries from physics_frames
         # Features: ["T_MK", "EM_cm3", "DNI", "SHEI"]
-        query_ts = np.zeros((len(physics_frames), 4), dtype=np.float64)
+        # Downsample to _MAX_DTW_LEN points so pure-Python DTW doesn't time out.
+        _MAX_DTW_LEN = 100
+        raw_query_ts = np.zeros((len(physics_frames), 4), dtype=np.float64)
         for idx, f in enumerate(physics_frames):
-            query_ts[idx, 0] = f.T_MK if f.T_MK is not None else 0.0
-            query_ts[idx, 1] = f.EM_cm3 if f.EM_cm3 is not None else 0.0
-            query_ts[idx, 2] = f.DNI if f.DNI is not None else 0.0
-            query_ts[idx, 3] = f.SHEI if f.SHEI is not None else 0.0
+            raw_query_ts[idx, 0] = f.T_MK if f.T_MK is not None else 0.0
+            raw_query_ts[idx, 1] = f.EM_cm3 if f.EM_cm3 is not None else 0.0
+            raw_query_ts[idx, 2] = f.DNI if f.DNI is not None else 0.0
+            raw_query_ts[idx, 3] = f.SHEI if f.SHEI is not None else 0.0
+        if len(raw_query_ts) > _MAX_DTW_LEN:
+            step = len(raw_query_ts) // _MAX_DTW_LEN
+            query_ts = raw_query_ts[::step][:_MAX_DTW_LEN]
+        else:
+            query_ts = raw_query_ts
 
         # 4. Refine candidates using DTW
         dtw_scores = []
         for eid, goes_class, dist, raw_v in candidates:
-            cand_ts = self.index.library_timeseries.get(eid)
-            if cand_ts is None:
+            cand_ts_full = self.index.library_timeseries.get(eid)
+            if cand_ts_full is None:
                 dtw_dist = float('inf')
             else:
+                if len(cand_ts_full) > _MAX_DTW_LEN:
+                    step = len(cand_ts_full) // _MAX_DTW_LEN
+                    cand_ts = cand_ts_full[::step][:_MAX_DTW_LEN]
+                else:
+                    cand_ts = cand_ts_full
                 dtw_dist = compute_dtw_distance(query_ts, cand_ts)
             
             dtw_scores.append((dtw_dist, eid, goes_class, raw_v))

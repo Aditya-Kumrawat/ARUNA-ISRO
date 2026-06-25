@@ -4,18 +4,25 @@ import pickle
 import logging
 import faiss
 import numpy as np
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 from sklearn.preprocessing import StandardScaler
 from aruna.l5_analogs.embedder import PhysicsFeatureEmbedder
 
 logger = logging.getLogger(__name__)
 
+# index.py lives at python/aruna/l5_analogs/index.py → project root is 4 levels up
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DEFAULT_DB_URL = f"sqlite:///{_PROJECT_ROOT / 'aruna_catalog.db'}"
+_DEFAULT_INDEX_PATH = str(_PROJECT_ROOT / "models" / "faiss_analog.index")
+
+
 class AnalogIndex:
     """
     Manages a FAISS index, fits scaling statistics, and handles automatic rebuilding
     after new master catalog entries.
     """
-    def __init__(self, db_url: str = "sqlite:///aruna_catalog.db", index_path: str = "models/faiss_analog.index") -> None:
+    def __init__(self, db_url: str = _DEFAULT_DB_URL, index_path: str = _DEFAULT_INDEX_PATH) -> None:
         self.db_url = db_url
         self.index_path = index_path
         self.scaler: Optional[StandardScaler] = None
@@ -237,9 +244,14 @@ class AnalogIndex:
             pair = tuple(sorted((keys[i], keys[j])))
             pairs.add(pair)
             
+        _MAX_DTW_LEN = 100
         for k1, k2 in pairs:
             ts1 = self.library_timeseries[k1]
             ts2 = self.library_timeseries[k2]
+            if len(ts1) > _MAX_DTW_LEN:
+                ts1 = ts1[::len(ts1)//_MAX_DTW_LEN][:_MAX_DTW_LEN]
+            if len(ts2) > _MAX_DTW_LEN:
+                ts2 = ts2[::len(ts2)//_MAX_DTW_LEN][:_MAX_DTW_LEN]
             dist = compute_dtw_distance(ts1, ts2)
             if dist != float('inf') and not np.isnan(dist):
                 distances.append(dist)

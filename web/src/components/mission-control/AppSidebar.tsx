@@ -36,16 +36,18 @@ export function AppSidebar() {
 
   return (
     <>
-      <div className="flex-shrink-0 transition-all duration-300" style={{ width: collapsed ? 80 : 240 }} />
+      {/* Spacer is fixed at 80px so the sidebar floats OVER the content when expanded */}
+      <div className="flex-shrink-0" style={{ width: 80 }} />
       
       <div 
-        className="fixed left-0 top-0 bottom-0 flex flex-col items-center py-6 z-[60] transition-all duration-300 border-r"
+        className="fixed left-0 top-0 bottom-0 flex flex-col z-[60] transition-all duration-300"
         style={{ 
           width: collapsed ? 80 : 240, 
-          background: 'rgba(11, 16, 32, 0.95)',
-          backdropFilter: 'blur(16px)',
-          borderColor: 'rgba(255, 200, 87, 0.1)',
+          background: '#000000', /* Vanta Black */
+          borderRight: '1px solid #1A1A1A', /* Exact border */
           alignItems: collapsed ? 'center' : 'stretch',
+          paddingTop: '24px',
+          paddingBottom: '24px'
         }}
       >
         <div className={`flex w-full ${collapsed ? 'justify-center' : 'justify-between px-6'} items-center mb-[40px]`}>
@@ -60,7 +62,7 @@ export function AppSidebar() {
         </div>
 
         {collapsed && (
-          <button onClick={toggle} className="absolute top-8 right-[-12px] bg-[#0b1020] border border-sunlit-gold/20 rounded-full p-0.5 text-sunlit-gold z-[70]">
+          <button onClick={toggle} className="absolute top-8 right-[-12px] bg-[#000000] border border-[#1A1A1A] rounded-full p-0.5 text-sunlit-gold z-[70]">
             <ChevronRight size={14} />
           </button>
         )}

@@ -414,6 +414,7 @@ def run_validation(
     calibrate: bool = False,
 ) -> Dict:
     logger.info("Starting L3 validation — mode=%s", mode)
+    out_dir.mkdir(parents=True, exist_ok=True)
     cfg = NowcastConfig(db_url=f"sqlite:///{out_dir / 'catalog.db'}")
     orchestrator = NowcastOrchestrator(config=cfg, kafka_producer=None)
 

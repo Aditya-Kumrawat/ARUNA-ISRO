@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="480" viewBox="0 0 1440 480">
+<defs>
+  <linearGradient id="background" x2="1" y2="1">
+    <stop stop-color="#050914"/><stop offset=".55" stop-color="#0A1425"/><stop offset="1" stop-color="#111D30"/>
+  </linearGradient>
+  <radialGradient id="sun">
+    <stop stop-color="#FFF9D6"/><stop offset=".17" stop-color="#FFD68B"/><stop offset=".48" stop-color="#FF8A39"/><stop offset=".78" stop-color="#C83E20"/><stop offset="1" stop-color="#511D24"/>
+  </radialGradient>
+  <radialGradient id="atmosphere">
+    <stop stop-color="#FF8C38" stop-opacity=".55"/><stop offset=".45" stop-color="#FF572D" stop-opacity=".17"/><stop offset="1" stop-color="#FF572D" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="blue" x2="1">
+    <stop stop-color="#45A9FF" stop-opacity="0"/><stop offset=".5" stop-color="#45A9FF"/><stop offset="1" stop-color="#45A9FF" stop-opacity="0"/>
+  </linearGradient>
+  <linearGradient id="orange" x2="1">
+    <stop stop-color="#FFAB5B" stop-opacity="0"/><stop offset=".5" stop-color="#FFAB5B"/><stop offset="1" stop-color="#FFAB5B" stop-opacity="0"/>
+  </linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="20"/></filter>
+  <filter id="soft"><feGaussianBlur stdDeviation="5"/></filter>
+  <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+    <path d="M42 0H0V42" fill="none" stroke="#8AB6E5" stroke-opacity=".055" stroke-width=".7"/>
+  </pattern>
+  <clipPath id="frame"><rect width="1440" height="480" rx="20"/></clipPath>
+</defs>
+<g clip-path="url(#frame)">
+  <rect width="1440" height="480" fill="url(#background)"/>
+  <rect width="1440" height="480" fill="url(#grid)"/>
+
+  <!-- Star field -->
+  <g fill="#C9E3FF">
+    <circle cx="85" cy="65" r="1.5"/><circle cx="220" cy="350" r="1"/>
+    <circle cx="390" cy="90" r="1"/><circle cx="530" cy="405" r="1.5"/>
+    <circle cx="700" cy="45" r="1"/><circle cx="1120" cy="55" r="1.5"/>
+    <circle cx="1320" cy="390" r="1"/><circle cx="1180" cy="310" r="1"/>
+    <circle cx="790" cy="370" r="1"/><circle cx="950" cy="80" r="1"/>
+    <circle cx="1360" cy="155" r="1.5"/><circle cx="620" cy="190" r="1"/>
+  </g>
+
+  <!-- Solar atmosphere and corona -->
+  <circle cx="1070" cy="238" r="245" fill="url(#atmosphere)" filter="url(#glow)">
+    <animate attributeName="opacity" values=".7;1;.7" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <g transform="translate(1070 238)">
+    <circle r="174" fill="none" stroke="#FF8A4D" stroke-width="2" opacity=".2">
+      <animate attributeName="r" values="168;180;168" dur="8s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="157" fill="none" stroke="#FFB76D" stroke-width="1" stroke-dasharray="3 8" opacity=".5">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="80s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Magnetic field lines -->
+  <g fill="none" stroke="#FFAD65" stroke-width="1.6" opacity=".35">
+    <path d="M900 238 C840 40 1110 15 1200 130"/>
+    <path d="M890 250 C830 470 1130 480 1220 340"/>
+    <path d="M960 100 C880 10 840 130 915 195"/>
+    <path d="M1190 115 C1300 35 1340 160 1210 210"/>
+    <path d="M950 360 C860 430 920 470 1050 420"/>
+    <path d="M1180 340 C1310 420 1340 300 1220 260"/>
+  </g>
+
+  <!-- Solar prominence -->
+  <path d="M1000 110 C910 20 950 0 1040 100 C1065 30 1100 40 1080 115"
+        fill="none" stroke="#FF9A49" stroke-width="9" opacity=".7" filter="url(#soft)">
+    <animate attributeName="opacity" values=".2;.85;.2" dur="4s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- Solar disk -->
+  <circle cx="1070" cy="238" r="119" fill="#FF8137" opacity=".2" filter="url(#glow)"/>
+  <circle cx="1070" cy="238" r="103" fill="url(#sun)"/>
+  <g fill="#FFF0BC" opacity=".3">
+    <circle cx="1034" cy="205" r="4"/><circle cx="1097" cy="180" r="3"/>
+    <circle cx="1115" cy="260" r="5"/><circle cx="1040" cy="282" r="3"/>
+    <circle cx="1080" cy="230" r="2"/>
+  </g>
+
+  <!-- Orbital tracks -->
+  <ellipse cx="1070" cy="238" rx="235" ry="100" transform="rotate(-24 1070 238)"
+           fill="none" stroke="#62B6FF" stroke-width="1" stroke-dasharray="4 8" opacity=".55"/>
+  <ellipse cx="1070" cy="238" rx="280" ry="155" transform="rotate(28 1070 238)"
+           fill="none" stroke="#6A9AC7" stroke-width="1" stroke-dasharray="2 10" opacity=".35"/>
+
+  <!-- Orbiting spacecraft -->
+  <g>
+    <animateTransform attributeName="transform" type="rotate" from="0 1070 238" to="360 1070 238" dur="32s" repeatCount="indefinite"/>
+    <g transform="translate(1300 190)">
+      <circle r="19" fill="#4DB9FF" opacity=".16">
+        <animate attributeName="r" values="13;23;13" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <rect x="-9" y="-8" width="18" height="16" rx="2" fill="#E4F2FF"/>
+      <rect x="-34" y="-7" width="22" height="14" fill="#3686C8"/>
+      <rect x="12" y="-7" width="22" height="14" fill="#3686C8"/>
+      <path d="M0 -8V-18 M-5 -18H5" stroke="#EAF5FF" stroke-width="2"/>
+      <circle r="2.5" fill="#FFB45D"/>
+    </g>
+  </g>
+
+  <!-- Telemetry particles -->
+  <g fill="#65BBFF">
+    <circle r="3"><animateMotion dur="7s" repeatCount="indefinite" path="M780 160 Q940 30 1160 150"/></circle>
+    <circle r="2"><animateMotion dur="9s" repeatCount="indefinite" path="M850 360 Q1020 430 1250 300"/></circle>
+  </g>
+
+  <!-- Identity -->
+  <text x="76" y="78" fill="#83BCEB" font-family="monospace" font-size="12" letter-spacing="4">INDEPENDENT SPACE INTELLIGENCE INITIATIVE</text>
+  <path d="M76 102H470" stroke="url(#blue)" stroke-width="1"/>
+  <text x="70" y="208" fill="#F4F7FF" font-family="Arial,sans-serif" font-size="102" font-weight="700" letter-spacing="5">ARUNA</text>
+  <text x="77" y="249" fill="#B5C9E0" font-family="Arial,sans-serif" font-size="17" letter-spacing="2">ADITYA-L1 SOLAR INTELLIGENCE</text>
+  <text x="77" y="282" fill="#7892B3" font-family="Arial,sans-serif" font-size="14" letter-spacing="1">REAL-TIME UNIFIED NOWCASTING &amp; ALERT SYSTEM</text>
+  <rect x="77" y="319" width="42" height="3" rx="1.5" fill="#FF9951"/>
+  <text x="77" y="354" fill="#F1F5FC" font-family="Arial,sans-serif" font-size="17" letter-spacing="3">FORESEE. PREPARE. PROTECT.</text>
+  <path d="M77 391H500" stroke="url(#orange)" opacity=".5"/>
+  <g font-family="monospace" font-size="10" letter-spacing="1.4">
+    <text x="77" y="420" fill="#FFB16C">SOLAR PHYSICS</text>
+    <text x="215" y="420" fill="#6BB9FF">PREDICTIVE AI</text>
+    <text x="345" y="420" fill="#A4B7CE">SPACE WEATHER</text>
+  </g>
+
+  <!-- Instrument HUD -->
+  <g font-family="monospace" font-size="10" letter-spacing="1">
+    <text x="1250" y="65" fill="#78BDF4">OBSERVATION SYSTEM</text>
+    <path d="M1250 76H1370" stroke="#78BDF4" opacity=".5"/>
+    <text x="1250" y="100" fill="#FFB16C">SOLEXS / HEL1OS</text>
+    <text x="1250" y="117" fill="#7189A6">DUAL INSTRUMENT</text>
+  </g>
+  <path d="M950 425H1370" stroke="#5F85AE" opacity=".4"/>
+  <text x="950" y="448" fill="#718DAE" font-family="monospace" font-size="10" letter-spacing="2">SCIENTIFIC COMPUTING • OPEN SOURCE</text>
+
+  <!-- Corner frame -->
+  <path d="M20 55V20H55 M1385 20H1420V55 M20 425V460H55 M1385 460H1420V425"
+        stroke="#75A7D4" stroke-opacity=".5" stroke-width="1.3" fill="none"/>
+</g>
+</svg>

@@ -1,159 +1,319 @@
-# ☀️ ARUNA
-### Aditya-L1 Real-time Unified Nowcasting & Alert System
 
-**Foresee. Prepare. Protect.**
-
-ARUNA is an open-source, physics-grounded solar flare nowcasting and forecasting platform built around India's Aditya-L1 solar observation mission. It aims to transform multi-instrument solar observations into interpretable flare intelligence, probabilistic forecasts, and operational space-weather alerts.
-
-By combining observations from **SoLEXS and HEL1OS**, physics-informed diagnostics, time-series forecasting, historical event retrieval, and impact assessment, ARUNA explores a unified approach to anticipating solar activity and understanding its potential consequences for Earth-dependent infrastructure.
+<!-- ========================================================= -->
+<!--                         ARUNA                             -->
+<!-- ========================================================= -->
 
 <p align="center">
-  <img src="docs/assets/aruna-banner.png" alt="ARUNA — Solar Intelligence Platform" width="100%">
+  <img src="docs/arunabanner.svg"
+       alt="ARUNA — Aditya-L1 Solar Intelligence"
+       width="100%">
+</p>
+
+<h3 align="center">
+  ADITYA-L1 REAL-TIME UNIFIED NOWCASTING & ALERT SYSTEM
+</h3>
+
+<p align="center">
+  <strong>FORESEE. PREPARE. PROTECT.</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Domain-Space%20Weather-blue">
-  <img src="https://img.shields.io/badge/Mission-Aditya--L1-orange">
+  An open-source initiative exploring physics-grounded solar
+  intelligence using observations from India's Aditya-L1 mission.
+</p>
+
+<p align="center">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-orange.svg">
+  </a>
+  <img src="https://img.shields.io/badge/Domain-Space%20Weather-14213D">
+  <img src="https://img.shields.io/badge/Mission-Aditya--L1-blue">
   <img src="https://img.shields.io/badge/Status-Active%20Development-yellow">
-  <img src="https://img.shields.io/badge/License-Apache%202.0-green">
+  <img src="https://img.shields.io/badge/Focus-Scientific%20AI-805AD5">
+</p>
+
+<p align="center">
+  <a href="#overview">Overview</a> •
+  <a href="#scientific-foundation">Science</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#capabilities">Capabilities</a> •
+  <a href="#technology-stack">Technology</a> •
+  <a href="#roadmap">Roadmap</a> •
+  <a href="#contributing">Contributing</a>
 </p>
 
 ---
 
-## 🌍 The Problem
+# ☀️ Overview
 
-Solar flares and associated space-weather events can affect satellite operations, navigation systems, radio communications, and human spaceflight.
+**ARUNA** (Aditya-L1 Real-time Unified Nowcasting & Alert System) is an open-source space-weather intelligence project designed to explore the transformation of solar observations into interpretable scientific insights, predictive intelligence and operationally relevant alerts.
 
-Although solar observation missions continuously collect valuable data, converting those observations into timely, interpretable and operationally useful intelligence remains a challenging engineering problem.
+Built around India's Aditya-L1 solar observation mission, ARUNA investigates how multi-instrument observations, physics-informed diagnostics, machine learning and probabilistic forecasting can be integrated into a unified solar intelligence pipeline.
 
-ARUNA explores how this gap can be addressed through an integrated scientific computing pipeline that combines instrument-level observations, physical diagnostics, predictive models, and impact-oriented reporting.
+The project focuses on bridging the gap between raw solar observations and actionable space-weather intelligence.
 
-## 🚀 What is ARUNA?
+Rather than treating solar observations as isolated datasets, ARUNA explores a connected scientific workflow involving:
 
-ARUNA is designed as a multi-layered solar intelligence system with four primary operational objectives:
+- Multi-instrument solar data ingestion.
+- Physics-grounded feature extraction.
+- Solar flare detection and classification.
+- Predictive time-series modelling.
+- Historical event retrieval.
+- Probabilistic forecasting and uncertainty assessment.
+- Space-weather impact intelligence.
+- Automated scientific reporting.
 
-| Capability | Objective |
+> **The vision:** Make complex solar observations more accessible, interpretable and useful through reproducible scientific computing.
+
+---
+
+# 🌍 The Problem
+
+Solar activity is one of the major natural drivers of space-weather disturbances.
+
+Solar flares and associated phenomena can influence:
+
+| Infrastructure | Potential impact |
 |---|---|
-| WATCH | Continuously monitor solar activity and instrument observations. |
-| WARN | Identify developing flare events and estimate their evolution. |
-| BRIEF | Translate solar activity into potential infrastructure-level risks. |
-| REPORT | Generate interpretable post-event analysis and diagnostics. |
+| Satellites | Radiation exposure and operational disturbances |
+| Navigation | GNSS and navigation signal degradation |
+| Communication | HF radio communication disruptions |
+| Aviation | Radiation exposure and communication risks |
+| Spaceflight | Radiation-related astronaut safety considerations |
+| Power infrastructure | Geomagnetically induced currents during relevant solar events |
 
-## 🛰️ Scientific Foundation
+Although scientific missions continuously collect valuable solar observations, transforming those observations into timely and interpretable intelligence remains a complex challenge.
 
-ARUNA is built around two complementary instruments aboard Aditya-L1:
+ARUNA explores an integrated approach to this challenge through scientific data engineering, physics-informed modelling and predictive analytics.
 
-**1. SoLEXS — Solar Low Energy X-ray Spectrometer**
+---
 
-- Observes soft X-ray emissions.
-- Provides insight into thermal plasma evolution.
-- Supports temperature and emission-measure diagnostics.
+# 🛰️ Scientific Foundation
 
-**2. HEL1OS — High Energy L1 Orbiting X-ray Spectrometer**
+ARUNA is designed around two complementary solar observation instruments aboard **Aditya-L1**.
 
-- Observes hard X-ray emissions.
-- Provides information about energetic solar flare processes.
-- Complements SoLEXS observations for thermal–nonthermal analysis.
+## 1. SoLEXS
 
-The central research direction is to treat these instruments as complementary observation streams rather than analysing their measurements independently.
+**Solar Low Energy X-ray Spectrometer**
 
-## ⚙️ System Architecture
+SoLEXS observes solar soft X-ray emissions and provides information useful for understanding thermal plasma behaviour during solar flares.
 
-The proposed ARUNA architecture is organised into nine processing layers.
+Research applications include:
+
+- Soft X-ray flux analysis.
+- Plasma temperature estimation.
+- Emission measure evolution.
+- Thermal response analysis.
+- Flare progression monitoring.
+
+## 2. HEL1OS
+
+**High Energy L1 Orbiting X-ray Spectrometer**
+
+HEL1OS observes higher-energy solar X-ray emissions and provides complementary information about energetic flare processes.
+
+Research applications include:
+
+- Hard X-ray observations.
+- Energetic particle-related diagnostics.
+- Spectral evolution.
+- Flare phase analysis.
+- Thermal–nonthermal interpretation.
+
+## Dual-instrument intelligence
+
+The central scientific direction of ARUNA is to investigate how complementary SoLEXS and HEL1OS observations can be aligned and analysed together.
+
+This enables research into:
+
+- Multi-energy observation fusion.
+- Thermal and nonthermal behaviour.
+- Spectral evolution.
+- Flare progression.
+- Physics-informed predictive features.
+
+---
+
+# ⚙️ Architecture
+
+ARUNA follows a modular, multi-layer scientific computing architecture.
+
+The proposed processing pipeline is organised into nine layers.
+
+```mermaid
+flowchart TD
+    A["Aditya-L1 Observations"] --> B["L0: Source Layer"]
+    B --> C["L1: Data Ingestion"]
+    C --> D["L2: Physics Engine"]
+    D --> E["L3: Nowcasting Engine"]
+    E --> F["L4: Forecasting Engine"]
+    F --> G["L5: Historical Retrieval"]
+    G --> H["L6: Threat Intelligence"]
+    H --> I["L7: Scientific Briefing"]
+    I --> J["L8: Dashboard & API"]
+
+    J --> K["Solar Intelligence Reports"]
+    J --> L["Space Weather Alerts"]
+
+    style A fill:#152C46,color:#fff
+    style D fill:#253F62,color:#fff
+    style F fill:#253F62,color:#fff
+    style H fill:#57351E,color:#fff
+    style K fill:#174B40,color:#fff
+    style L fill:#174B40,color:#fff
+```
+
+### Layer responsibilities
 
 | Layer | Component | Responsibility |
 |---|---|---|
-| L0 | Source Layer | Scientific data source management |
-| L1 | Data Ingestion | FITS ingestion, integrity checks and time alignment |
-| L2 | Physics Engine | Plasma diagnostics and physical feature extraction |
-| L3 | Nowcasting Engine | Flare detection and event classification |
-| L4 | Forecasting Engine | Probabilistic time-series forecasting |
-| L5 | Historical Retrieval | Similarity-based historical event retrieval |
+| L0 | Source Layer | Scientific observation source management |
+| L1 | Data Ingestion | FITS ingestion, validation and time alignment |
+| L2 | Physics Engine | Physical diagnostics and feature extraction |
+| L3 | Nowcasting Engine | Flare detection and classification |
+| L4 | Forecasting Engine | Predictive time-series modelling |
+| L5 | Historical Retrieval | Similarity-based historical event analysis |
 | L6 | Threat Intelligence | Potential infrastructure impact assessment |
-| L7 | LLM Briefing | Structured, interpretable alert generation |
-| L8 | Dashboard Services | Visualisation and operational interfaces |
+| L7 | Scientific Briefing | Interpretable scientific summaries |
+| L8 | Dashboard & API | Visualisation and system integration |
 
-The architecture also defines ARUNA-XL as an extension for broader solar, heliophysical and Earth-impact intelligence.
+The architecture also describes **ARUNA-XL**, an extension direction for broader solar, heliophysical and Earth-impact intelligence.
 
-## 🧠 Key Research Directions
+*Architecture documentation describes the intended system design. Individual components are at different implementation and validation stages.*
 
-**Physics-informed diagnostics**
+---
+
+# 🧠 Capabilities & Research Directions
+
+## Solar Physics Intelligence
+
+Research-oriented physical diagnostics include:
+
 - Plasma temperature estimation.
 - Emission measure evolution.
-- Dynamic Neupert Integral (DNI).
+- Spectral hardness analysis.
 - Thermal–nonthermal phase-space analysis.
-- Spectral hardness evolution.
+- Dynamic Neupert Integral (DNI).
+- Multi-instrument temporal correlation.
 
-**Solar flare intelligence**
-- Flare onset and evolution analysis.
-- GOES-class event classification.
-- Precursor identification.
-- Event reconstruction and historical comparison.
+## Solar Flare Intelligence
 
-**Predictive intelligence**
+- Flare onset identification.
+- Flare event classification.
+- Solar activity monitoring.
+- Historical flare comparison.
+- Event evolution analysis.
+- Precursor identification research.
+
+## Predictive Intelligence
+
 - Time-series forecasting.
+- Physics-informed feature engineering.
 - Multi-stream model integration.
-- Probabilistic predictions.
-- Uncertainty estimation and calibration.
+- Probabilistic prediction.
+- Uncertainty estimation.
+- Forecast calibration.
 
-**Space-weather impact assessment**
+## Historical Event Intelligence
+
+- Historical event indexing.
+- Similarity-based retrieval.
+- Dynamic Time Warping.
+- Feature-space comparison.
+- Event reconstruction and analysis.
+
+## Space-Weather Impact Assessment
+
+Potential research applications include:
+
+- Satellite operational risk indicators.
 - NavIC-related risk assessment.
 - HF communication disruption analysis.
-- Satellite operational risk indicators.
-- Human spaceflight radiation-risk considerations.
+- Radiation-risk considerations for human spaceflight.
+- Solar event impact reporting.
 
-*These are architectural and research objectives; implementation and validation status varies by module.*
+These capabilities are research objectives and should not be interpreted as validated operational forecasting services unless explicitly demonstrated.
 
-## 🔬 Technology Stack
+---
 
-The repository is organised around scientific computing, machine learning, backend services and visualisation.
+# 🔬 Technology Stack
 
-The intended technology ecosystem includes:
+ARUNA combines scientific computing, machine learning, data engineering and application development.
 
-- **Scientific computing:** Python, NumPy, SciPy, Astropy
-- **Astronomical data:** FITS, SunPy and relevant space-weather data sources
-- **Machine learning:** PyTorch and time-series forecasting approaches
-- **Forecast calibration:** MAPIE
-- **Similarity retrieval:** FAISS and Dynamic Time Warping
-- **Backend and data services:** API services and event-driven processing
-- **Visualisation:** Streamlit and Plotly
-- **Deployment:** Docker and containerised services
+| Domain | Technologies |
+|---|---|
+| Scientific Computing | Python, NumPy, SciPy |
+| Astronomy | Astropy, SunPy |
+| Data Processing | FITS, scientific data pipelines |
+| Machine Learning | PyTorch |
+| Forecasting | Time-series modelling |
+| Calibration | MAPIE |
+| Similarity Retrieval | FAISS, Dynamic Time Warping |
+| Backend | Python API services |
+| Visualisation | Plotly, Streamlit |
+| Deployment | Docker, Docker Compose |
 
-Refer to the individual modules and configuration files for the actual dependencies and implementation status.
+Refer to the actual module dependency manifests for currently implemented integrations.
 
-## 📁 Repository Structure
+---
+
+# 📁 Repository Structure
 
 ```text
 ARUNA-ISRO/
 │
-├── .agents/                # Agent and development instructions
-├── api/                    # API services
-├── config/                 # Configuration files
-├── data/                   # Data resources and datasets
-├── docs/                   # Documentation
-├── models/                 # Model-related components
-├── notebooks/              # Research and experimentation
-├── python/                 # Python implementation
-├── web/                    # Web interface
+├── .agents/
 │
-├── ARUNA_Pipeline_PRD.md   # Engineering pipeline specification
-├── TRAIN_FORECAST.md       # Forecasting documentation
-├── eval_model.py           # Model evaluation entry point
-├── fit_mapie.py            # Forecast calibration utility
-├── docker-compose.yml      # Container configuration
-├── docker-compose.dev.yml  # Development configuration
-└── .env.example            # Environment template
+├── api/
+│   └── Backend and API components
+│
+├── config/
+│   └── Configuration files
+│
+├── data/
+│   └── Data resources and datasets
+│
+├── docs/
+│   ├── arunabanner.svg
+│   └── Project documentation
+│
+├── models/
+│   └── Model components
+│
+├── notebooks/
+│   └── Research and experimentation
+│
+├── python/
+│   └── Scientific computing implementation
+│
+├── web/
+│   └── Web interface
+│
+├── ARUNA_Pipeline_PRD.md
+├── TRAIN_FORECAST.md
+├── eval_model.py
+├── fit_mapie.py
+│
+├── docker-compose.yml
+├── docker-compose.dev.yml
+├── .env.example
+│
+└── README.md
 ```
 
-## 🛠️ Getting Started
+---
 
-### Prerequisites
+# 🚀 Getting Started
+
+ARUNA is under active development. The following steps provide the initial repository setup.
+
+## Prerequisites
 
 - Python 3.10+
 - Git
 - Docker and Docker Compose (for supported container workflows)
 
-### Clone the repository
+## Clone the repository
 
 ```bash
 git clone https://github.com/Aditya-Kumrawat/ARUNA-ISRO.git
@@ -161,101 +321,162 @@ git clone https://github.com/Aditya-Kumrawat/ARUNA-ISRO.git
 cd ARUNA-ISRO
 ```
 
-### Configure the environment
+## Configure environment variables
 
 ```bash
 cp .env.example .env
 ```
 
-Configure the required environment variables according to your local setup.
+Configure the required environment variables for your environment.
 
-### Install dependencies
+## Install dependencies
 
-Install the dependencies specified by the relevant module's dependency manifest. Setup instructions will be expanded as the individual components are standardised.
+Install the dependencies specified by the relevant module's dependency manifest.
 
-### Run
+## Run the project
 
-Refer to the module-specific documentation and deployment configuration for the appropriate entry points.
+Refer to the individual module documentation and deployment configuration for the appropriate entry points.
 
-> Note: ARUNA is under active development. A complete, verified end-to-end installation workflow is not yet documented.
+> A fully verified end-to-end installation workflow is still being standardised. Avoid assuming all services are currently deployable through a single command.
 
-## 📊 Research & Engineering Documentation
+---
 
-The repository includes a detailed engineering specification covering:
+# 📚 Research & Documentation
 
-- End-to-end processing architecture.
-- Data contracts and validation.
-- Instrument data ingestion.
-- Physics and forecasting engines.
+The repository includes engineering documentation describing the system's intended architecture and research workflow.
+
+| Document | Description |
+|---|---|
+| `ARUNA_Pipeline_PRD.md` | End-to-end architecture and engineering specification |
+| `TRAIN_FORECAST.md` | Forecasting workflow documentation |
+| `eval_model.py` | Model evaluation utility |
+| `fit_mapie.py` | Forecast calibration utility |
+
+For implementation details, consult the individual modules and their documentation.
+
+---
+
+# 🧪 Scientific Validation
+
+Scientific reliability is essential for any system dealing with space-weather intelligence.
+
+ARUNA aims to establish reproducible evaluation practices involving:
+
+- Data integrity and preprocessing validation.
+- Instrument-level temporal alignment.
+- Physical consistency checks.
+- Historical event benchmarking.
+- Forecast accuracy evaluation.
+- Probabilistic calibration.
+- Uncertainty analysis.
+- Reproducible experimentation.
+
+Predictions and risk assessments should be independently validated against authoritative scientific observations before any operational use.
+
+**ARUNA is an independent research and engineering project. It is not an official ISRO service and does not claim ISRO endorsement or operational deployment.**
+
+---
+
+# 🗺️ Roadmap
+
+The project is being developed incrementally.
+
+### Phase 1 — Scientific Foundation
+
+- [ ] Standardise scientific data ingestion.
+- [ ] Strengthen SoLEXS and HEL1OS preprocessing.
+- [ ] Establish instrument-level validation.
+- [ ] Implement reproducible physics diagnostics.
+
+### Phase 2 — Solar Intelligence
+
+- [ ] Benchmark flare detection.
+- [ ] Develop physics-informed feature pipelines.
+- [ ] Evaluate predictive modelling.
+- [ ] Improve forecast calibration.
+
+### Phase 3 — Historical Intelligence
+
+- [ ] Expand historical event retrieval.
+- [ ] Introduce similarity-based analysis.
+- [ ] Develop event reconstruction workflows.
+
+### Phase 4 — Space-Weather Intelligence
+
+- [ ] Expand threat assessment.
+- [ ] Validate infrastructure impact indicators.
+- [ ] Improve scientific briefing generation.
+- [ ] Integrate dashboard and alert services.
+
+### Phase 5 — Open Scientific Ecosystem
+
+- [ ] Publish reproducible benchmarks.
+- [ ] Improve documentation.
+- [ ] Encourage external research contributions.
+- [ ] Expand scientific integrations.
+
+---
+
+# 🤝 Contributing
+
+ARUNA welcomes contributions from developers, researchers, astronomers, data scientists and space-technology enthusiasts.
+
+Potential contribution areas:
+
+- Solar physics and scientific diagnostics.
+- Scientific data processing.
+- Machine learning and forecasting.
+- Statistical validation.
 - Historical event retrieval.
-- Threat intelligence.
-- API and deployment architecture.
-- Monitoring, testing and validation.
+- API and backend development.
+- Scientific visualisation.
+- Documentation and testing.
 
-Start here:
-
-- [Engineering Pipeline PRD](ARUNA_Pipeline_PRD.md)
-- [Forecasting Documentation](TRAIN_FORECAST.md)
-
-## 🧪 Validation and Scientific Responsibility
-
-Space-weather predictions can influence safety-critical decisions.
-
-ARUNA is a research and engineering project, not an officially operational ISRO warning service.
-
-Predictions, risk assessments and generated briefings should be independently validated against authoritative scientific observations before being used for operational decisions.
-
-The project does not claim official ISRO affiliation, endorsement or operational deployment.
-
-## 🤝 Contributing
-
-Contributions from researchers, developers, astronomers and space-technology enthusiasts are welcome.
-
-Potential contribution areas include:
-
-- Solar data processing and calibration.
-- Physics-informed modelling.
-- Time-series forecasting.
-- Scientific validation and benchmarking.
-- API development and system integration.
-- Visualisation and documentation.
-
-Suggested contribution workflow:
+### Contribution workflow
 
 1. Fork the repository.
 2. Create a feature branch.
-3. Implement and test your changes.
-4. Submit a pull request with a clear technical explanation.
+3. Implement your changes.
+4. Test and document the changes.
+5. Submit a pull request with a clear explanation.
 
-## 🗺️ Roadmap
+For substantial changes, consider opening an issue first to discuss the proposed approach.
 
-- [ ] Standardise end-to-end local setup.
-- [ ] Strengthen SoLEXS and HEL1OS data ingestion.
-- [ ] Validate instrument-level preprocessing.
-- [ ] Benchmark physics-informed flare detection.
-- [ ] Evaluate probabilistic forecasting.
-- [ ] Expand historical event retrieval.
-- [ ] Validate infrastructure impact assessment.
-- [ ] Improve dashboard and alert integration.
-- [ ] Publish reproducible evaluation benchmarks.
+---
 
-## 👨‍💻 Maintainer
+# 👨‍💻 Maintainer
 
 **Aditya Kumrawat**
 
 Creator and primary maintainer of ARUNA.
 
-GitHub: [@Aditya-Kumrawat](https://github.com/Aditya-Kumrawat)
+- GitHub: [@Aditya-Kumrawat](https://github.com/Aditya-Kumrawat)
+- Repository: [ARUNA-ISRO](https://github.com/Aditya-Kumrawat/ARUNA-ISRO)
 
-Repository: [ARUNA-ISRO](https://github.com/Aditya-Kumrawat/ARUNA-ISRO)
+---
 
-## 📜 License
+# 📜 License
 
-This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+This project is licensed under the **MIT License**.
+
+You are free to use, modify, distribute and build upon the software, subject to the conditions of the license.
+
+See the [LICENSE](LICENSE) file for complete details.
 
 ---
 
 <p align="center">
-  <b>ARUNA — Foresee. Prepare. Protect.</b><br>
+  <strong>ARUNA</strong>
+</p>
+
+<p align="center">
+  FORESEE. PREPARE. PROTECT.
+</p>
+
+<p align="center">
   Exploring the future of physics-grounded solar intelligence.
+</p>
+
+<p align="center">
+  <sub>Built with curiosity, scientific thinking and open-source engineering.</sub>
 </p>
